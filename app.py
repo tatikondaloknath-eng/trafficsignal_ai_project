@@ -109,7 +109,7 @@ def get_connection():
 @app.route("/")
 def home():
 
-    return render_template("dashboard.html")
+    return render_template("index.html")
 
 
 # ============================================================
