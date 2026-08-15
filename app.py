@@ -22,8 +22,7 @@ DB_USER = os.environ.get(
     "avnadmin"
 )
 
-DB_PASSWORD = os.environ.get("AVNS_xWYifAAJBCzufPNZN8z")
-
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
 DB_NAME = os.environ.get(
     "DB_NAME",
     "defaultdb"
