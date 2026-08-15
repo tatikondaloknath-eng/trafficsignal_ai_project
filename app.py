@@ -11,7 +11,7 @@ app = Flask(__name__)
 DB_HOST = "mysql-1153c1de-tatikondaloknath-205b.d.aivencloud.com"
 DB_PORT = 26298
 DB_USER = "avnadmin"
-DB_PASSWORD = os.environ.get("AVNS_xWYifAAJBCzufPNZN8z")
+DB_PASSWORD = "AVNS_xWYifAAJBCzufPNZN8z"
 DB_NAME = "defaultdb"
 CA_FILE = "ca.pem"
 
