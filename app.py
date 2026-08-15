@@ -87,7 +87,7 @@ def get_connection():
 def home():
 
     try:
-        return render_template("dashboard.html")
+        return render_template("index.html")
 
     except Exception:
 
