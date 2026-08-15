@@ -1,375 +1,236 @@
-from flask import Flask, render_template, jsonify, request
-from datetime import datetime
-import math
+from flask import Flask, jsonify, render_template
+import pymysql
+import os
 
 app = Flask(__name__)
 
-# ============================================================
-# SAMPLE TRAFFIC DATA
-# Later this will come from Aiven MySQL
-# ============================================================
+# ==========================================
+# AIVEN MYSQL CONFIGURATION
+# ==========================================
 
-traffic_data = [
-    {
-        "id": 1,
-        "name": "Junction 1",
-        "north": 45,
-        "south": 32,
-        "east": 18,
-        "west": 20,
-        "density": 0.78,
-        "status": "HIGH"
-    },
-    {
-        "id": 2,
-        "name": "Junction 2",
-        "north": 28,
-        "south": 25,
-        "east": 30,
-        "west": 22,
-        "density": 0.65,
-        "status": "MEDIUM"
-    },
-    {
-        "id": 3,
-        "name": "Junction 3",
-        "north": 15,
-        "south": 10,
-        "east": 12,
-        "west": 8,
-        "density": 0.35,
-        "status": "LOW"
-    },
-    {
-        "id": 4,
-        "name": "Junction 4",
-        "north": 35,
-        "south": 28,
-        "east": 20,
-        "west": 18,
-        "density": 0.60,
-        "status": "MEDIUM"
-    }
-]
+DB_HOST = "mysql-1153c1de-tatikondaloknath-205b.d.aivencloud.com"
+DB_PORT = 26298
+DB_USER = "avnadmin"
+DB_PASSWORD = os.environ.get("AVNS_xWYifAAJBCzufPNZN8z")
+DB_NAME = "defaultdb"
+CA_FILE = "ca.pem"
 
 
-# ============================================================
-# HOME
-# ============================================================
+# ==========================================
+# DATABASE CONNECTION
+# ==========================================
+
+def get_connection():
+
+    connection = pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        ssl={
+            "ca": CA_FILE
+        },
+        cursorclass=pymysql.cursors.DictCursor
+    )
+
+    return connection
+
+
+# ==========================================
+# HOME PAGE
+# ==========================================
 
 @app.route("/")
 def home():
-    return render_template("index.html")
 
+    return render_template("dashboard.html")
 
-# ============================================================
-# GET TRAFFIC DATA
-# ============================================================
 
-@app.route("/api/traffic")
-def get_traffic():
-    return jsonify(traffic_data)
+# ==========================================
+# TEST DATABASE
+# ==========================================
 
+@app.route("/api/test-db")
+def test_database():
 
-# ============================================================
-# A* SEARCH
-# ============================================================
+    try:
 
-def heuristic(vehicle_count, green_time):
-    """
-    Estimates how far the current green time is
-    from the ideal green time.
-    """
+        connection = get_connection()
 
-    ideal_time = 10 + (vehicle_count * 0.75)
+        cursor = connection.cursor()
 
-    return abs(ideal_time - green_time)
+        cursor.execute("SELECT COUNT(*) AS total FROM traffic_data")
 
+        result = cursor.fetchone()
 
-def astar_signal_optimization(vehicle_count):
-    """
-    Simple A* based search for optimal green signal time.
+        cursor.close()
+        connection.close()
 
-    State = possible green time
-    Cost  = waiting/congestion cost
-    """
+        return jsonify({
+            "status": "success",
+            "message": "Connected to Aiven MySQL",
+            "total_records": result["total"]
+        })
 
-    possible_times = list(range(10, 61, 5))
+    except Exception as e:
 
-    start_time = 30
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
-    open_set = []
-    visited = set()
 
-    open_set.append({
-        "time": start_time,
-        "g": 0,
-        "f": heuristic(vehicle_count, start_time)
-    })
+# ==========================================
+# TRAFFIC DATA
+# ==========================================
 
-    best_time = start_time
-    best_score = float("inf")
+@app.route("/api/traffic-data")
+def traffic_data():
 
-    while open_set:
+    try:
 
-        open_set.sort(key=lambda x: x["f"])
+        connection = get_connection()
 
-        current = open_set.pop(0)
+        cursor = connection.cursor()
 
-        current_time = current["time"]
+        cursor.execute("""
+            SELECT
+                vehicle_count,
+                average_speed,
+                lane_occupancy,
+                flow_rate,
+                time_of_day,
+                waiting_time
+            FROM traffic_data
+            LIMIT 100
+        """)
 
-        if current_time in visited:
-            continue
+        data = cursor.fetchall()
 
-        visited.add(current_time)
+        cursor.close()
+        connection.close()
 
-        # Cost function
-        waiting_cost = max(
-            0,
-            vehicle_count * 2 - current_time
-        )
+        return jsonify(data)
 
-        congestion_cost = (
-            vehicle_count /
-            max(current_time, 1)
-        ) * 10
+    except Exception as e:
 
-        total_cost = (
-            waiting_cost +
-            congestion_cost +
-            current["g"]
-        )
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
-        if total_cost < best_score:
-            best_score = total_cost
-            best_time = current_time
 
-        # Explore neighboring signal times
-        for next_time in possible_times:
+# ==========================================
+# DASHBOARD SUMMARY
+# ==========================================
 
-            if next_time in visited:
-                continue
+@app.route("/api/dashboard")
+def dashboard():
 
-            step_cost = abs(next_time - current_time)
+    try:
 
-            g = current["g"] + step_cost
+        connection = get_connection()
 
-            h = heuristic(vehicle_count, next_time)
+        cursor = connection.cursor()
 
-            f = g + h
+        # Total vehicles
+        cursor.execute("""
+            SELECT SUM(vehicle_count) AS total_vehicles
+            FROM traffic_data
+        """)
 
-            open_set.append({
-                "time": next_time,
-                "g": g,
-                "f": f
-            })
+        total_vehicles = cursor.fetchone()["total_vehicles"]
 
-    return best_time
 
+        # Average waiting time
+        cursor.execute("""
+            SELECT AVG(waiting_time) AS avg_waiting_time
+            FROM traffic_data
+        """)
 
-# ============================================================
-# CONSTRAINT BASED OPTIMIZATION
-# ============================================================
+        avg_waiting = cursor.fetchone()["avg_waiting_time"]
 
-def apply_constraints(timings):
 
-    MIN_GREEN = 10
-    MAX_GREEN = 60
-    YELLOW_TIME = 5
-    TOTAL_CYCLE = 120
+        # Average speed
+        cursor.execute("""
+            SELECT AVG(average_speed) AS avg_speed
+            FROM traffic_data
+        """)
 
-    # Minimum and maximum constraints
-    for direction in timings:
+        avg_speed = cursor.fetchone()["avg_speed"]
 
-        timings[direction] = max(
-            MIN_GREEN,
-            min(MAX_GREEN, timings[direction])
-        )
 
-    # Total green time
-    total_green = sum(timings.values())
+        # Average lane occupancy
+        cursor.execute("""
+            SELECT AVG(lane_occupancy) AS avg_occupancy
+            FROM traffic_data
+        """)
 
-    # Available green time
-    available_green = TOTAL_CYCLE - (
-        4 * YELLOW_TIME
-    )
+        avg_occupancy = cursor.fetchone()["avg_occupancy"]
 
-    if total_green > available_green:
 
-        scale = available_green / total_green
+        cursor.close()
+        connection.close()
 
-        for direction in timings:
 
-            timings[direction] = round(
-                timings[direction] * scale
-            )
+        # Traffic status
+        if avg_waiting is None:
 
-            timings[direction] = max(
-                MIN_GREEN,
-                timings[direction]
-            )
+            status = "UNKNOWN"
 
-    return timings
+        elif avg_waiting < 20:
 
+            status = "LOW"
 
-# ============================================================
-# OPTIMIZATION API
-# ============================================================
+        elif avg_waiting < 40:
 
-@app.route("/api/optimize", methods=["POST"])
-def optimize():
+            status = "MEDIUM"
 
-    data = request.get_json()
+        else:
 
-    junction_id = int(
-        data.get("junction_id", 1)
-    )
+            status = "HIGH"
 
-    junction = next(
-        (
-            item for item in traffic_data
-            if item["id"] == junction_id
-        ),
-        traffic_data[0]
-    )
 
-    # A* search
-    timings = {
+        return jsonify({
 
-        "north": astar_signal_optimization(
-            junction["north"]
-        ),
+            "total_vehicles": round(total_vehicles or 0),
 
-        "south": astar_signal_optimization(
-            junction["south"]
-        ),
+            "average_waiting_time":
+                round(avg_waiting or 0, 2),
 
-        "east": astar_signal_optimization(
-            junction["east"]
-        ),
+            "average_speed":
+                round(avg_speed or 0, 2),
 
-        "west": astar_signal_optimization(
-            junction["west"]
-        )
-    }
+            "average_occupancy":
+                round(avg_occupancy or 0, 2),
 
-    # Constraint optimization
-    timings = apply_constraints(timings)
+            "traffic_status": status,
 
-    total_green = sum(timings.values())
+            "total_records": 10000
 
-    total_cycle = total_green + 20
+        })
 
-    # Estimate improvement
-    vehicle_total = (
-        junction["north"]
-        + junction["south"]
-        + junction["east"]
-        + junction["west"]
-    )
 
-    before_wait = vehicle_total * 2.5
+    except Exception as e:
 
-    after_wait = max(
-        before_wait * 0.78,
-        10
-    )
+        return jsonify({
 
-    improvement = (
-        (before_wait - after_wait)
-        / before_wait
-    ) * 100
+            "status": "error",
 
-    result = {
+            "message": str(e)
 
-        "junction": junction["name"],
+        })
 
-        "timings": timings,
 
-        "yellow": 5,
-
-        "cycle": total_cycle,
-
-        "algorithm": "A* Search + CSP",
-
-        "before_waiting": round(
-            before_wait,
-            1
-        ),
-
-        "after_waiting": round(
-            after_wait,
-            1
-        ),
-
-        "improvement": round(
-            improvement,
-            1
-        ),
-
-        "timestamp":
-            datetime.now().strftime(
-                "%H:%M:%S"
-            )
-    }
-
-    return jsonify(result)
-
-
-# ============================================================
-# STATISTICS
-# ============================================================
-
-@app.route("/api/statistics")
-def statistics():
-
-    total_vehicles = sum(
-        item["north"]
-        + item["south"]
-        + item["east"]
-        + item["west"]
-        for item in traffic_data
-    )
-
-    average_density = sum(
-        item["density"]
-        for item in traffic_data
-    ) / len(traffic_data)
-
-    average_waiting = 48.6
-
-    high_count = sum(
-        1
-        for item in traffic_data
-        if item["status"] == "HIGH"
-    )
-
-    return jsonify({
-
-        "intersections":
-            len(traffic_data),
-
-        "vehicles":
-            total_vehicles,
-
-        "waiting":
-            average_waiting,
-
-        "density":
-            round(average_density, 2),
-
-        "high":
-            high_count
-    })
-
-
-# ============================================================
-# RUN
-# ============================================================
+# ==========================================
+# RUN APPLICATION
+# ==========================================
 
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
-        port=5000,
-        debug=False
+        port=int(os.environ.get("PORT", 5000)),
+        debug=True
     )
