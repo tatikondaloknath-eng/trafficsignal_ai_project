@@ -816,15 +816,149 @@
                     </h2>
 
                     <p>
-                        Traffic records used by the optimization engine.
+                        Select a junction to view its traffic records.
                     </p>
+
+                </div>
+
+                <style>
+                    .dataset-filter-panel {
+                        margin-bottom: 20px;
+                    }
+
+                    .dataset-filter {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        gap: 20px;
+                        flex-wrap: wrap;
+                    }
+
+                    .filter-label {
+                        display: block;
+                        font-size: 12px;
+                        font-weight: 700;
+                        letter-spacing: .08em;
+                        margin-bottom: 8px;
+                        opacity: .75;
+                    }
+
+                    #datasetJunctionSelect {
+                        min-width: 230px;
+                        padding: 12px 14px;
+                        border-radius: 10px;
+                        border: 1px solid rgba(255,255,255,.15);
+                        background: #0d2942;
+                        color: white;
+                        font-size: 15px;
+                        outline: none;
+                    }
+
+                    .dataset-summary {
+                        padding: 12px 18px;
+                        border-radius: 10px;
+                        background: rgba(36,216,121,.08);
+                        border: 1px solid rgba(36,216,121,.18);
+                    }
+
+                    .dataset-summary span {
+                        margin-right: 8px;
+                        opacity: .75;
+                    }
+
+                    .dataset-summary strong {
+                        color: #24d879;
+                    }
+
+                    .dataset-note {
+                        margin-top: 12px;
+                        font-size: 13px;
+                        opacity: .7;
+                    }
+
+                    .dataset-loading,
+                    .dataset-empty,
+                    .dataset-error {
+                        padding: 30px;
+                        text-align: center;
+                        opacity: .8;
+                    }
+
+                    .dataset-error {
+                        color: #ff6b6b;
+                    }
+                </style>
+
+                <div class="panel dataset-filter-panel">
+
+                    <div class="dataset-filter">
+
+                        <div>
+                            <span class="filter-label">
+                                SELECT JUNCTION
+                            </span>
+
+                            <select id="datasetJunctionSelect">
+                                <option value="all">
+                                    All Junctions
+                                </option>
+                                <option value="1">
+                                    Junction 1
+                                </option>
+                                <option value="2">
+                                    Junction 2
+                                </option>
+                                <option value="3">
+                                    Junction 3
+                                </option>
+                                <option value="4">
+                                    Junction 4
+                                </option>
+                            </select>
+                        </div>
+
+                        <div class="dataset-summary">
+                            <span>Records</span>
+                            <strong id="junctionRecordCount">0</strong>
+                        </div>
+
+                    </div>
+
+                    <div class="dataset-note" id="datasetNote">
+                        Loading dataset...
+                    </div>
 
                 </div>
 
                 <div class="panel">
 
-                    <div id="fullDataset"
-                         class="full-dataset">
+                    <div class="panel-title">
+                        <div>
+                            <h2 id="datasetTitle">
+                                All Junctions
+                            </h2>
+                            <p id="datasetSubtitle">
+                                Showing traffic records
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="data-table">
+
+                        <div class="data-head">
+                            <span>ID</span>
+                            <span>Junction</span>
+                            <span>Vehicles</span>
+                            <span>Speed</span>
+                            <span>Occupancy</span>
+                            <span>Flow Rate</span>
+                            <span>Time</span>
+                            <span>Waiting</span>
+                        </div>
+
+                        <div id="filteredDatasetRows">
+                        </div>
+
                     </div>
 
                 </div>
