@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>
+        Smart Traffic Management
+    </title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+
+</head>
+
+<body>
+
+<div class="app">
+
+    <!-- SIDEBAR -->
+
+    <aside class="sidebar">
+
+        <div class="logo">
+
+            <div class="logo-icon">
+                🚦
+            </div>
+
+            <div>
+                <strong>
+                    Smart Traffic
+                </strong>
+
+                <span>
+                    Management
+                </span>
+            </div>
+
+        </div>
+
+
+        <nav>
+
+            <button class="nav-item active"
+                    data-section="dashboard">
+
+                <span>⌂</span>
+                Dashboard
+
+            </button>
+
+
+            <button class="nav-item"
+                    data-section="dataset">
+
+                <span>▤</span>
+                Dataset
+
+            </button>
+
+
+            <button class="nav-item"
+                    data-section="intersections">
+
+                <span>✣</span>
+                Intersections
+
+            </button>
+
+
+            <button class="nav-item"
+                    data-section="optimization">
+
+                <span>⚙</span>
+                AI Optimization
+
+            </button>
+
+
+            <button class="nav-item"
+                    data-section="simulation">
+
+                <span>▶</span>
+                Simulation
+
+            </button>
+
+
+            <button class="nav-item"
+                    data-section="reports">
+
+                <span>▥</span>
+                Reports
+
+            </button>
+
+
+            <button class="nav-item"
+                    data-section="settings">
+
+                <span>⚙</span>
+                Settings
+
+            </button>
+
+        </nav>
+
+
+        <div class="sidebar-bottom">
+
+            <div class="city">
+
+                <div class="city-lights">
+                    ✦ ✦ ✦
+                </div>
+
+                <strong>
+                    Smarter Signals
+                </strong>
+
+                <span>
+                    Smoother Cities
+                </span>
+
+            </div>
+
+        </div>
+
+    </aside>
+
+
+    <!-- MAIN -->
+
+    <main class="main">
+
+        <!-- TOP BAR -->
+
+        <header class="topbar">
+
+            <div>
+
+                <h1>
+                    Adaptive Multi-Agent
+                    Traffic Signal Optimization
+                </h1>
+
+                <p>
+                    AI Search & Constraint-Based Optimization
+                </p>
+
+            </div>
+
+
+            <div class="profile">
+
+                <div class="time">
+                    <strong id="clock">
+                        --:--:--
+                    </strong>
+
+                    <span id="date">
+                        --
+                    </span>
+                </div>
+
+                <div class="notification">
+                    🔔
+                    <small>3</small>
+                </div>
+
+                <div class="avatar">
+                    A
+                </div>
+
+                <span>
+                    Admin
+                </span>
+
+            </div>
+
+        </header>
+
+
+        <!-- CONTENT -->
+
+        <section class="content">
+
+
+            <!-- DASHBOARD -->
+
+            <div id="dashboard"
+                 class="section active">
+
+
+                <!-- STAT CARDS -->
+
+                <div class="stats-grid">
+
+                    <div class="stat-card">
+
+                        <div class="stat-icon blue">
+                            ✣
+                        </div>
+
+                        <div>
+
+                            <span>
+                                TOTAL INTERSECTIONS
+                            </span>
+
+                            <strong id="totalIntersections">
+                                4
+                            </strong>
+
+                            <small>
+                                Active intersections
+                            </small>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="stat-card">
+
+                        <div class="stat-icon green">
+                            🚗
+                        </div>
+
+                        <div>
+
+                            <span>
+                                TOTAL VEHICLES
+                            </span>
+
+                            <strong id="totalVehicles">
+                                0
+                            </strong>
+
+                            <small>
+                                Across all intersections
+                            </small>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="stat-card">
+
+                        <div class="stat-icon orange">
+                            ◷
+                        </div>
+
+                        <div>
+
+                            <span>
+                                AVG WAITING TIME
+                            </span>
+
+                            <strong>
+                                <span id="avgWaiting">
+                                    48.6
+                                </span>
+                                sec
+                            </strong>
+
+                            <small class="positive">
+                                ↓ 12.4% from yesterday
+                            </small>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="stat-card">
+
+                        <div class="stat-icon purple">
+                            👥
+                        </div>
+
+                        <div>
+
+                            <span>
+                                TRAFFIC STATUS
+                            </span>
+
+                            <strong class="high">
+                                HIGH
+                            </strong>
+
+                            <small>
+                                Current congestion
+                            </small>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- MAIN DASHBOARD -->
+
+                <div class="dashboard-grid">
+
+
+                    <!-- INTERSECTIONS -->
+
+                    <div class="panel">
+
+                        <div class="panel-title">
+
+                            <h2>
+                                Intersections Overview
+                            </h2>
+
+                            <span>
+                                ● Live
+                            </span>
+
+                        </div>
+
+
+                        <div id="intersectionCards"
+                             class="intersection-list">
+                        </div>
+
+                    </div>
+
+
+                    <!-- INTERSECTION VISUAL -->
+
+                    <div class="panel intersection-panel">
+
+                        <div class="panel-title">
+
+                            <h2>
+                                Live Intersection
+                            </h2>
+
+                            <select id="junctionSelect">
+                                <option value="1">
+                                    Junction 1
+                                </option>
+
+                                <option value="2">
+                                    Junction 2
+                                </option>
+
+                                <option value="3">
+                                    Junction 3
+                                </option>
+
+                                <option value="4">
+                                    Junction 4
+                                </option>
+                            </select>
+
+                        </div>
+
+
+                        <div class="intersection">
+
+                            <div class="road vertical"></div>
+
+                            <div class="road horizontal"></div>
+
+
+                            <div class="junction-center">
+
+                                <div class="lane-mark north">
+                                    ↑
+                                </div>
+
+                                <div class="lane-mark south">
+                                    ↓
+                                </div>
+
+                                <div class="lane-mark east">
+                                    →
+                                </div>
+
+                                <div class="lane-mark west">
+                                    ←
+                                </div>
+
+                            </div>
+
+
+                            <div class="traffic-light light-north">
+
+                                <span class="red"></span>
+                                <span class="yellow"></span>
+                                <span class="green active-light"></span>
+
+                            </div>
+
+
+                            <div class="traffic-light light-south">
+
+                                <span class="red active-light-red"></span>
+                                <span class="yellow"></span>
+                                <span class="green"></span>
+
+                            </div>
+
+
+                            <div class="traffic-light light-east">
+
+                                <span class="red"></span>
+                                <span class="yellow"></span>
+                                <span class="green active-light"></span>
+
+                            </div>
+
+
+                            <div class="traffic-light light-west">
+
+                                <span class="red active-light-red"></span>
+                                <span class="yellow"></span>
+                                <span class="green"></span>
+
+                            </div>
+
+
+                            <div class="direction-label north-label">
+                                NORTH
+                                <strong id="northTime">
+                                    40 sec
+                                </strong>
+                            </div>
+
+
+                            <div class="direction-label south-label">
+                                SOUTH
+                                <strong id="southTime">
+                                    30 sec
+                                </strong>
+                            </div>
+
+
+                            <div class="direction-label east-label">
+                                EAST
+                                <strong id="eastTime">
+                                    20 sec
+                                </strong>
+                            </div>
+
+
+                            <div class="direction-label west-label">
+                                WEST
+                                <strong id="westTime">
+                                    15 sec
+                                </strong>
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- AI PANEL -->
+
+                    <div class="panel">
+
+                        <div class="panel-title">
+
+                            <h2>
+                                AI Optimized Signal Timings
+                            </h2>
+
+                            <span class="ai-badge">
+                                AI
+                            </span>
+
+                        </div>
+
+
+                        <div class="timing-table">
+
+                            <div class="table-head">
+
+                                <span>
+                                    Direction
+                                </span>
+
+                                <span>
+                                    Green
+                                </span>
+
+                                <span>
+                                    Yellow
+                                </span>
+
+                                <span>
+                                    Red
+                                </span>
+
+                            </div>
+
+
+                            <div class="timing-row">
+
+                                <span>North</span>
+                                <strong id="tableNorth">
+                                    40 sec
+                                </strong>
+                                <span>5 sec</span>
+                                <span>55 sec</span>
+
+                            </div>
+
+
+                            <div class="timing-row">
+
+                                <span>South</span>
+                                <strong id="tableSouth">
+                                    30 sec
+                                </strong>
+                                <span>5 sec</span>
+                                <span>65 sec</span>
+
+                            </div>
+
+
+                            <div class="timing-row">
+
+                                <span>East</span>
+                                <strong id="tableEast">
+                                    20 sec
+                                </strong>
+                                <span>5 sec</span>
+                                <span>75 sec</span>
+
+                            </div>
+
+
+                            <div class="timing-row">
+
+                                <span>West</span>
+                                <strong id="tableWest">
+                                    15 sec
+                                </strong>
+                                <span>5 sec</span>
+                                <span>80 sec</span>
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="optimization-result">
+
+                            <div class="result-header">
+
+                                <strong>
+                                    Optimization Result
+                                </strong>
+
+                                <span class="success">
+                                    SUCCESS
+                                </span>
+
+                            </div>
+
+
+                            <div class="result-line">
+
+                                <span>
+                                    Algorithm
+                                </span>
+
+                                <strong>
+                                    A* Search + CSP
+                                </strong>
+
+                            </div>
+
+
+                            <div class="result-line">
+
+                                <span>
+                                    Objective
+                                </span>
+
+                                <strong>
+                                    Minimize Waiting Time
+                                </strong>
+
+                            </div>
+
+
+                            <div class="result-line">
+
+                                <span>
+                                    Cycle Time
+                                </span>
+
+                                <strong id="cycleTime">
+                                    120 sec
+                                </strong>
+
+                            </div>
+
+
+                            <div class="result-line">
+
+                                <span>
+                                    Improvement
+                                </span>
+
+                                <strong class="positive"
+                                        id="improvement">
+                                    18.7%
+                                </strong>
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="button-row">
+
+                            <button id="runAI"
+                                    class="primary-btn">
+
+                                ▶ Run AI Optimization
+
+                            </button>
+
+
+                            <button id="applyConstraints"
+                                    class="success-btn">
+
+                                ✓ Apply Constraints
+
+                            </button>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- DATASET -->
+
+                <div class="bottom-grid">
+
+
+                    <div class="panel">
+
+                        <div class="panel-title">
+
+                            <h2>
+                                Traffic Dataset
+                            </h2>
+
+                            <button class="small-btn">
+                                Upload Dataset
+                            </button>
+
+                        </div>
+
+
+                        <div class="data-table">
+
+                            <div class="data-head">
+
+                                <span>Time</span>
+                                <span>Junction</span>
+                                <span>North</span>
+                                <span>South</span>
+                                <span>East</span>
+                                <span>West</span>
+                                <span>Density</span>
+                                <span>Status</span>
+
+                            </div>
+
+
+                            <div id="datasetRows">
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- PERFORMANCE -->
+
+                    <div class="panel">
+
+                        <div class="panel-title">
+
+                            <h2>
+                                Performance Analysis
+                            </h2>
+
+                            <select>
+                                <option>
+                                    Today
+                                </option>
+
+                                <option>
+                                    This Week
+                                </option>
+
+                            </select>
+
+                        </div>
+
+
+                        <div class="performance">
+
+                            <div class="mini-chart">
+
+                                <span>
+                                    Total Vehicles
+                                </span>
+
+                                <strong>
+                                    1,248
+                                </strong>
+
+                                <div class="bars">
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                </div>
+
+                            </div>
+
+
+                            <div class="mini-chart">
+
+                                <span>
+                                    Avg Waiting
+                                </span>
+
+                                <strong>
+                                    48.6 sec
+                                </strong>
+
+                                <div class="bars second">
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                </div>
+
+                            </div>
+
+
+                            <div class="mini-chart">
+
+                                <span>
+                                    Signal Usage
+                                </span>
+
+                                <strong>
+                                    72%
+                                </strong>
+
+                                <div class="bars third">
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                    <i></i>
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- OTHER SECTIONS -->
+
+            <div id="dataset"
+                 class="section">
+
+                <div class="page-header">
+
+                    <h2>
+                        Traffic Dataset
+                    </h2>
+
+                    <p>
+                        Traffic records used by the optimization engine.
+                    </p>
+
+                </div>
+
+                <div class="panel">
+
+                    <div id="fullDataset"
+                         class="full-dataset">
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div id="intersections"
+                 class="section">
+
+                <div class="page-header">
+
+                    <h2>
+                        Intersection Management
+                    </h2>
+
+                    <p>
+                        Monitor all AI traffic agents.
+                    </p>
+
+                </div>
+
+                <div id="allIntersections"
+                     class="agent-grid">
+                </div>
+
+            </div>
+
+
+            <div id="optimization"
+                 class="section">
+
+                <div class="page-header">
+
+                    <h2>
+                        AI Optimization
+                    </h2>
+
+                    <p>
+                        Optimize traffic signal timings using
+                        A* Search and Constraint Satisfaction.
+                    </p>
+
+                </div>
+
+                <div class="optimization-page">
+
+                    <div class="ai-box">
+
+                        <div class="ai-icon">
+                            🧠
+                        </div>
+
+                        <h2>
+                            AI Traffic Optimization Engine
+                        </h2>
+
+                        <p>
+                            The system searches possible signal
+                            timings and selects an optimized
+                            solution while satisfying traffic
+                            constraints.
+                        </p>
+
+                        <button id="runAI2"
+                                class="primary-btn large">
+
+                            Run Optimization
+
+                        </button>
+
+                    </div>
+
+
+                    <div class="algorithm-grid">
+
+                        <div class="algorithm-card">
+
+                            <h3>
+                                A* Search
+                            </h3>
+
+                            <p>
+                                Searches possible signal timing
+                                states and selects a low-cost
+                                solution.
+                            </p>
+
+                            <span>
+                                ACTIVE
+                            </span>
+
+                        </div>
+
+
+                        <div class="algorithm-card">
+
+                            <h3>
+                                Constraint Satisfaction
+                            </h3>
+
+                            <p>
+                                Ensures minimum, maximum and
+                                cycle-time constraints.
+                            </p>
+
+                            <span>
+                                ACTIVE
+                            </span>
+
+                        </div>
+
+
+                        <div class="algorithm-card">
+
+                            <h3>
+                                Multi-Agent Coordination
+                            </h3>
+
+                            <p>
+                                Each junction acts as an
+                                intelligent traffic agent.
+                            </p>
+
+                            <span>
+                                ACTIVE
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div id="simulation"
+                 class="section">
+
+                <div class="page-header">
+
+                    <h2>
+                        Traffic Simulation
+                    </h2>
+
+                    <p>
+                        Simulate optimized traffic signals.
+                    </p>
+
+                </div>
+
+                <div class="simulation-box">
+
+                    <div class="sim-light">
+
+                        <span class="red active"></span>
+                        <span class="yellow"></span>
+                        <span class="green"></span>
+
+                    </div>
+
+                    <h2 id="simulationStatus">
+                        NORTH — RED
+                    </h2>
+
+                    <p>
+                        Signal simulation will use
+                        optimized timings.
+                    </p>
+
+                    <button id="startSimulation"
+                            class="primary-btn">
+
+                        ▶ Start Simulation
+
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div id="reports"
+                 class="section">
+
+                <div class="page-header">
+
+                    <h2>
+                        Reports & Analytics
+                    </h2>
+
+                    <p>
+                        Performance results from traffic optimization.
+                    </p>
+
+                </div>
+
+                <div class="report-grid">
+
+                    <div class="report-card">
+                        <span>
+                            Average Waiting Time
+                        </span>
+
+                        <strong>
+                            48.6 sec
+                        </strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>
+                            Optimization Improvement
+                        </span>
+
+                        <strong>
+                            18.7%
+                        </strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>
+                            Traffic Density
+                        </span>
+
+                        <strong>
+                            0.58
+                        </strong>
+                    </div>
+
+                    <div class="report-card">
+                        <span>
+                            Active Agents
+                        </span>
+
+                        <strong>
+                            4
+                        </strong>
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div id="settings"
+                 class="section">
+
+                <div class="page-header">
+
+                    <h2>
+                        System Settings
+                    </h2>
+
+                    <p>
+                        Configure optimization parameters.
+                    </p>
+
+                </div>
+
+                <div class="settings-panel">
+
+                    <label>
+                        Minimum Green Time
+
+                        <input
+                            type="number"
+                            value="10"
+                        >
+
+                    </label>
+
+
+                    <label>
+                        Maximum Green Time
+
+                        <input
+                            type="number"
+                            value="60"
+                        >
+
+                    </label>
+
+
+                    <label>
+                        Yellow Time
+
+                        <input
+                            type="number"
+                            value="5"
+                        >
+
+                    </label>
+
+
+                    <label>
+                        Cycle Time
+
+                        <input
+                            type="number"
+                            value="120"
+                        >
+
+                    </label>
+
+                </div>
+
+            </div>
+
+
+        </section>
+
+
+        <footer>
+
+            Smart Traffic Management System
+
+            <span>
+                Adaptive Multi-Agent Traffic Signal Optimization
+            </span>
+
+        </footer>
+
+    </main>
+
+</div>
+
+
+<script
+    src="{{ url_for('static', filename='script.js') }}">
+</script>
+
+</body>
+
+</html>
