@@ -523,3 +523,158 @@ if __name__ == "__main__":
         port=port,
         debug=False
     )
+# ============================================================
+# FILTER TRAFFIC DATA BY JUNCTION
+# ============================================================
+
+@app.route("/api/traffic-by-junction")
+def traffic_by_junction():
+
+    connection = None
+    cursor = None
+
+    try:
+        junction = request.args.get("junction", "all")
+
+        connection = get_connection()
+        cursor = connection.cursor()
+
+        # ----------------------------------------------------
+        # ALL JUNCTIONS
+        # ----------------------------------------------------
+
+        if junction == "all":
+
+            cursor.execute("""
+                SELECT
+                    id,
+                    vehicle_count,
+                    average_speed,
+                    lane_occupancy,
+                    flow_rate,
+                    time_of_day,
+                    waiting_time
+                FROM traffic_data
+                ORDER BY id
+                LIMIT 1000
+            """)
+
+        # ----------------------------------------------------
+        # JUNCTION 1
+        # ----------------------------------------------------
+
+        elif junction == "1":
+
+            cursor.execute("""
+                SELECT
+                    id,
+                    vehicle_count,
+                    average_speed,
+                    lane_occupancy,
+                    flow_rate,
+                    time_of_day,
+                    waiting_time
+                FROM traffic_data
+                WHERE id <= 2500
+                ORDER BY id
+                LIMIT 1000
+            """)
+
+        # ----------------------------------------------------
+        # JUNCTION 2
+        # ----------------------------------------------------
+
+        elif junction == "2":
+
+            cursor.execute("""
+                SELECT
+                    id,
+                    vehicle_count,
+                    average_speed,
+                    lane_occupancy,
+                    flow_rate,
+                    time_of_day,
+                    waiting_time
+                FROM traffic_data
+                WHERE id > 2500
+                AND id <= 5000
+                ORDER BY id
+                LIMIT 1000
+            """)
+
+        # ----------------------------------------------------
+        # JUNCTION 3
+        # ----------------------------------------------------
+
+        elif junction == "3":
+
+            cursor.execute("""
+                SELECT
+                    id,
+                    vehicle_count,
+                    average_speed,
+                    lane_occupancy,
+                    flow_rate,
+                    time_of_day,
+                    waiting_time
+                FROM traffic_data
+                WHERE id > 5000
+                AND id <= 7500
+                ORDER BY id
+                LIMIT 1000
+            """)
+
+        # ----------------------------------------------------
+        # JUNCTION 4
+        # ----------------------------------------------------
+
+        elif junction == "4":
+
+            cursor.execute("""
+                SELECT
+                    id,
+                    vehicle_count,
+                    average_speed,
+                    lane_occupancy,
+                    flow_rate,
+                    time_of_day,
+                    waiting_time
+                FROM traffic_data
+                WHERE id > 7500
+                ORDER BY id
+                LIMIT 1000
+            """)
+
+        else:
+
+            return jsonify({
+                "status": "error",
+                "message": "Invalid junction"
+            }), 400
+
+
+        data = cursor.fetchall()
+
+        return jsonify({
+            "status": "success",
+            "junction": junction,
+            "records": data,
+            "count": len(data)
+        })
+
+
+    except Exception as e:
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
