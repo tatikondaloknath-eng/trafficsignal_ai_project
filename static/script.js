@@ -130,29 +130,38 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // 4. AI OPTIMIZATION
-    async function executeOptimization(junctionId) {
+    // 4. AI OPTIMIZATION & DASHBOARD LIVE INTERSECTION SYNC
+    async function executeOptimization(junctionId = 1) {
         try {
             const res = await fetch(`/api/optimize?junction=${junctionId}`);
             const result = await res.json();
 
             if (result.status === "success") {
+                // Update Optimization view outputs if open
                 const optCycle = document.getElementById("opt-cycle-disp");
                 const optImpr = document.getElementById("opt-impr-disp");
                 if (optCycle) optCycle.innerText = `${result.cycle_time}s`;
                 if (optImpr) optImpr.innerText = `+${result.improvement}%`;
 
-                // Update live dashboard signals indicator
+                // Update Dashboard summary tags
+                const dashOptCycle = document.getElementById("dash-opt-cycle");
+                const dashOptImpr = document.getElementById("dash-opt-impr");
+                if (dashOptCycle) dashOptCycle.innerText = `${result.cycle_time} sec`;
+                if (dashOptImpr) dashOptImpr.innerText = `+${result.improvement}%`;
+
+                // Update Crossroad visual units
                 if (document.getElementById("sig-N")) document.getElementById("sig-N").innerText = `${result.signals.North.green} sec`;
                 if (document.getElementById("sig-S")) document.getElementById("sig-S").innerText = `${result.signals.South.green} sec`;
                 if (document.getElementById("sig-E")) document.getElementById("sig-E").innerText = `${result.signals.East.green} sec`;
                 if (document.getElementById("sig-W")) document.getElementById("sig-W").innerText = `${result.signals.West.green} sec`;
 
+                // Update Dashboard Timings Table
                 if (document.getElementById("tbl-n-g")) document.getElementById("tbl-n-g").innerText = `${result.signals.North.green} sec`;
                 if (document.getElementById("tbl-s-g")) document.getElementById("tbl-s-g").innerText = `${result.signals.South.green} sec`;
                 if (document.getElementById("tbl-e-g")) document.getElementById("tbl-e-g").innerText = `${result.signals.East.green} sec`;
                 if (document.getElementById("tbl-w-g")) document.getElementById("tbl-w-g").innerText = `${result.signals.West.green} sec`;
 
+                // Update AI Optimization page table
                 const tbody = document.getElementById("opt-table-body");
                 if (tbody) {
                     tbody.innerHTML = Object.entries(result.signals).map(([dir, plan]) => `
@@ -167,21 +176,31 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             return result;
         } catch (e) {
-            console.error("Optimization failed:", e);
+            console.error("Optimization execution failed:", e);
             return null;
         }
     }
+
+    // Dashboard Junction Select Change Listener
+    const dashJunctionSelect = document.getElementById("dash-junction-select");
+    if (dashJunctionSelect) {
+        dashJunctionSelect.addEventListener("change", (e) => {
+            executeOptimization(e.target.value);
+        });
+    }
+
+    // Run Optimization Buttons
+    document.getElementById("dash-opt-btn")?.addEventListener("click", () => {
+        const jId = dashJunctionSelect ? dashJunctionSelect.value : 1;
+        executeOptimization(jId);
+    });
 
     document.getElementById("run-opt-btn")?.addEventListener("click", () => {
         const jId = document.getElementById("opt-junction-select").value;
         executeOptimization(jId);
     });
 
-    document.getElementById("dash-opt-btn")?.addEventListener("click", () => {
-        executeOptimization(1);
-    });
-
-    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE (DYNAMIC PER JUNCTION)
+    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE (CANVAS)
     const canvas = document.getElementById("trafficCanvas");
     const ctx = canvas ? canvas.getContext("2d") : null;
     let simAnimationId = null;
@@ -229,7 +248,7 @@ document.addEventListener("DOMContentLoaded", () => {
             );
 
             if (nearStopLine && !canPass && !this.crossed) {
-                // Wait at stop line
+                // Halt at stop line
             } else {
                 this.x += this.vx;
                 this.y += this.vy;
@@ -257,7 +276,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const jTraffic = trafficData.find(j => j.id == jId) || trafficData[0];
 
-            // Adjust spawn frequency based on junction density
             simSpawnRate = Math.min(0.09, Math.max(0.03, (jTraffic.density / 100) * 0.1));
             
             if (document.getElementById("sim-junction-stats")) {
@@ -268,7 +286,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 document.getElementById("sim-speed-val").innerText = `${jTraffic.average_speed} km/h`;
             }
 
-            // Build dynamic simulation phases scaled directly from A* Green Timings
             if (optData.status === "success") {
                 const s = optData.signals;
                 phases = [
@@ -427,9 +444,13 @@ document.addEventListener("DOMContentLoaded", () => {
         alert("Constraints saved successfully!");
     });
 
-    document.getElementById("refresh-global-btn")?.addEventListener("click", loadDashboardStats);
+    document.getElementById("refresh-global-btn")?.addEventListener("click", () => {
+        loadDashboardStats();
+        executeOptimization(dashJunctionSelect ? dashJunctionSelect.value : 1);
+    });
 
-    // Initial Dashboard Load
+    // Initial Dashboard & Live Signal Load
     loadDashboardStats();
+    executeOptimization(1);
     drawIntersection();
 });
