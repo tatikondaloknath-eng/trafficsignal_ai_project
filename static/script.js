@@ -22,6 +22,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (targetView === "intersections") loadIntersections();
             if (targetView === "reports") loadReports();
             if (targetView === "settings") loadSettings();
+            if (targetView === "simulation") loadSimJunctionConfig();
         });
     });
 
@@ -66,7 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
         `).join("");
     }
 
-    // 2. DATASET TABLE & PAGINATION (BUG FIX)
+    // 2. DATASET TABLE & PAGINATION
     async function loadDataset(page = 1) {
         currentDatasetPage = page;
         const tbody = document.getElementById("dataset-table-body");
@@ -129,54 +130,73 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // 4. AI OPTIMIZATION (A* + CSP Execution)
-    document.getElementById("run-opt-btn")?.addEventListener("click", async () => {
-        const jId = document.getElementById("opt-junction-select").value;
-        const tbody = document.getElementById("opt-table-body");
-        tbody.innerHTML = `<tr><td colspan="4" class="text-center">Calculating A* heuristic state space...</td></tr>`;
-
+    // 4. AI OPTIMIZATION
+    async function executeOptimization(junctionId) {
         try {
-            const res = await fetch(`/api/optimize?junction=${jId}`);
+            const res = await fetch(`/api/optimize?junction=${junctionId}`);
             const result = await res.json();
 
             if (result.status === "success") {
-                document.getElementById("opt-cycle-disp").innerText = `${result.cycle_time}s`;
-                document.getElementById("opt-impr-disp").innerText = `+${result.improvement}%`;
+                const optCycle = document.getElementById("opt-cycle-disp");
+                const optImpr = document.getElementById("opt-impr-disp");
+                if (optCycle) optCycle.innerText = `${result.cycle_time}s`;
+                if (optImpr) optImpr.innerText = `+${result.improvement}%`;
 
-                // Update live dashboard signals indicator too
-                document.getElementById("sig-N").innerText = `${result.signals.North.green}s`;
-                document.getElementById("sig-S").innerText = `${result.signals.South.green}s`;
-                document.getElementById("sig-E").innerText = `${result.signals.East.green}s`;
-                document.getElementById("sig-W").innerText = `${result.signals.West.green}s`;
+                // Update live dashboard signals indicator
+                if (document.getElementById("sig-N")) document.getElementById("sig-N").innerText = `${result.signals.North.green} sec`;
+                if (document.getElementById("sig-S")) document.getElementById("sig-S").innerText = `${result.signals.South.green} sec`;
+                if (document.getElementById("sig-E")) document.getElementById("sig-E").innerText = `${result.signals.East.green} sec`;
+                if (document.getElementById("sig-W")) document.getElementById("sig-W").innerText = `${result.signals.West.green} sec`;
 
-                tbody.innerHTML = Object.entries(result.signals).map(([dir, plan]) => `
-                    <tr>
-                        <td><strong>${dir}</strong></td>
-                        <td class="text-success">${plan.green} sec</td>
-                        <td>${plan.yellow} sec</td>
-                        <td>${plan.red} sec</td>
-                    </tr>
-                `).join("");
+                if (document.getElementById("tbl-n-g")) document.getElementById("tbl-n-g").innerText = `${result.signals.North.green} sec`;
+                if (document.getElementById("tbl-s-g")) document.getElementById("tbl-s-g").innerText = `${result.signals.South.green} sec`;
+                if (document.getElementById("tbl-e-g")) document.getElementById("tbl-e-g").innerText = `${result.signals.East.green} sec`;
+                if (document.getElementById("tbl-w-g")) document.getElementById("tbl-w-g").innerText = `${result.signals.West.green} sec`;
+
+                const tbody = document.getElementById("opt-table-body");
+                if (tbody) {
+                    tbody.innerHTML = Object.entries(result.signals).map(([dir, plan]) => `
+                        <tr>
+                            <td><strong>${dir}</strong></td>
+                            <td class="text-success">${plan.green} sec</td>
+                            <td>${plan.yellow} sec</td>
+                            <td>${plan.red} sec</td>
+                        </tr>
+                    `).join("");
+                }
             }
+            return result;
         } catch (e) {
-            tbody.innerHTML = `<tr><td colspan="4" class="text-center">Optimization failed.</td></tr>`;
+            console.error("Optimization failed:", e);
+            return null;
         }
+    }
+
+    document.getElementById("run-opt-btn")?.addEventListener("click", () => {
+        const jId = document.getElementById("opt-junction-select").value;
+        executeOptimization(jId);
     });
 
-    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE (CANVAS)
+    document.getElementById("dash-opt-btn")?.addEventListener("click", () => {
+        executeOptimization(1);
+    });
+
+    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE (DYNAMIC PER JUNCTION)
     const canvas = document.getElementById("trafficCanvas");
     const ctx = canvas ? canvas.getContext("2d") : null;
     let simAnimationId = null;
     let simRunning = false;
+    let simTimerInterval = null;
 
-    const phases = [
+    let simSpawnRate = 0.05;
+    let phases = [
         { dir: "NORTH", duration: 8, color: "#06d6a0" },
         { dir: "NORTH_Y", duration: 2, color: "#ffd166" },
         { dir: "SOUTH", duration: 6, color: "#06d6a0" },
         { dir: "SOUTH_Y", duration: 2, color: "#ffd166" },
-        { dir: "EAST", duration: 5, color: "#06d6a0" },
+        { dir: "EAST", duration: 4, color: "#06d6a0" },
         { dir: "EAST_Y", duration: 2, color: "#ffd166" },
-        { dir: "WEST", duration: 4, color: "#06d6a0" },
+        { dir: "WEST", duration: 3, color: "#06d6a0" },
         { dir: "WEST_Y", duration: 2, color: "#ffd166" }
     ];
 
@@ -201,7 +221,6 @@ document.addEventListener("DOMContentLoaded", () => {
         update(activeDirection) {
             const canPass = activeDirection.startsWith(this.direction);
             
-            // Stop-line boundaries
             const nearStopLine = (
                 (this.direction === "NORTH" && this.y >= 200 && this.y <= 215) ||
                 (this.direction === "SOUTH" && this.y <= 295 && this.y >= 280) ||
@@ -214,7 +233,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 this.x += this.vx;
                 this.y += this.vy;
-                if (this.x > 330 && this.x < 370 && this.y > 220 && this.y < 280) {
+                if (this.x > 320 && this.x < 380 && this.y > 210 && this.y < 290) {
                     this.crossed = true;
                 }
             }
@@ -226,8 +245,57 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    async function loadSimJunctionConfig() {
+        const jId = document.getElementById("sim-junction-select") ? document.getElementById("sim-junction-select").value : 1;
+        try {
+            const [optRes, trafficRes] = await Promise.all([
+                fetch(`/api/optimize?junction=${jId}`),
+                fetch("/api/traffic")
+            ]);
+            const optData = await optRes.json();
+            const trafficData = await trafficRes.json();
+
+            const jTraffic = trafficData.find(j => j.id == jId) || trafficData[0];
+
+            // Adjust spawn frequency based on junction density
+            simSpawnRate = Math.min(0.09, Math.max(0.03, (jTraffic.density / 100) * 0.1));
+            
+            if (document.getElementById("sim-junction-stats")) {
+                document.getElementById("sim-junction-stats").innerText = 
+                    `Junction ${jId}: Avg Vehicles: ${jTraffic.average_vehicles} | Density: ${jTraffic.density}% | Speed: ${jTraffic.average_speed} km/h`;
+            }
+            if (document.getElementById("sim-speed-val")) {
+                document.getElementById("sim-speed-val").innerText = `${jTraffic.average_speed} km/h`;
+            }
+
+            // Build dynamic simulation phases scaled directly from A* Green Timings
+            if (optData.status === "success") {
+                const s = optData.signals;
+                phases = [
+                    { dir: "NORTH", duration: Math.max(3, Math.round(s.North.green / 5)), color: "#06d6a0" },
+                    { dir: "NORTH_Y", duration: 2, color: "#ffd166" },
+                    { dir: "SOUTH", duration: Math.max(3, Math.round(s.South.green / 5)), color: "#06d6a0" },
+                    { dir: "SOUTH_Y", duration: 2, color: "#ffd166" },
+                    { dir: "EAST", duration: Math.max(3, Math.round(s.East.green / 5)), color: "#06d6a0" },
+                    { dir: "EAST_Y", duration: 2, color: "#ffd166" },
+                    { dir: "WEST", duration: Math.max(3, Math.round(s.West.green / 5)), color: "#06d6a0" },
+                    { dir: "WEST_Y", duration: 2, color: "#ffd166" }
+                ];
+                currentPhaseIndex = 0;
+                phaseTimeRemaining = phases[0].duration;
+            }
+        } catch (e) {
+            console.error("Failed to load junction simulation config:", e);
+        }
+    }
+
+    document.getElementById("sim-junction-select")?.addEventListener("change", () => {
+        loadSimJunctionConfig();
+        resetSimulation();
+    });
+
     function spawnTraffic() {
-        if (Math.random() < 0.05) {
+        if (Math.random() < simSpawnRate) {
             const dirs = ["NORTH", "SOUTH", "EAST", "WEST"];
             const chosen = dirs[Math.floor(Math.random() * dirs.length)];
             vehiclesList.push(new Vehicle(chosen));
@@ -286,7 +354,18 @@ document.addEventListener("DOMContentLoaded", () => {
         simAnimationId = requestAnimationFrame(simLoop);
     }
 
-    let simTimerInterval = null;
+    function resetSimulation() {
+        simRunning = false;
+        clearInterval(simTimerInterval);
+        cancelAnimationFrame(simAnimationId);
+        vehiclesList = [];
+        currentPhaseIndex = 0;
+        phaseTimeRemaining = phases[0].duration;
+        drawIntersection();
+        document.getElementById("sim-queue-count").innerText = "0";
+        document.getElementById("sim-timer").innerText = "0s";
+    }
+
     document.getElementById("sim-start-btn")?.addEventListener("click", () => {
         if (simRunning) return;
         simRunning = true;
@@ -305,17 +384,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }, 1000);
     });
 
-    document.getElementById("sim-reset-btn")?.addEventListener("click", () => {
-        simRunning = false;
-        clearInterval(simTimerInterval);
-        cancelAnimationFrame(simAnimationId);
-        vehiclesList = [];
-        currentPhaseIndex = 0;
-        phaseTimeRemaining = phases[0].duration;
-        drawIntersection();
-        document.getElementById("sim-queue-count").innerText = "0";
-        document.getElementById("sim-timer").innerText = "0s";
-    });
+    document.getElementById("sim-reset-btn")?.addEventListener("click", resetSimulation);
 
     // 6. REPORTS & SETTINGS
     async function loadReports() {
@@ -358,9 +427,7 @@ document.addEventListener("DOMContentLoaded", () => {
         alert("Constraints saved successfully!");
     });
 
-    document.getElementById("refresh-global-btn")?.addEventListener("click", () => {
-        loadDashboardStats();
-    });
+    document.getElementById("refresh-global-btn")?.addEventListener("click", loadDashboardStats);
 
     // Initial Dashboard Load
     loadDashboardStats();
