@@ -82,7 +82,6 @@
 
                 <!-- LIVE INTERSECTION ROAD GRAPHIC & AI SIGNAL TIMINGS -->
                 <div class="dashboard-intersection-row">
-                    <!-- Road Crossroad Graphic -->
                     <div class="card road-card">
                         <div class="card-header-flex">
                             <h3><i class="fa-solid fa-traffic-light"></i> LIVE INTERSECTION</h3>
@@ -99,7 +98,6 @@
                                 <span class="arrow arrow-right"><i class="fa-solid fa-arrow-right"></i></span>
                             </div>
 
-                            <!-- North Unit -->
                             <div class="traffic-unit unit-north">
                                 <div class="unit-label">NORTH</div>
                                 <div class="unit-time" id="sig-N">40 sec</div>
@@ -109,7 +107,6 @@
                                 </div>
                             </div>
 
-                            <!-- South Unit -->
                             <div class="traffic-unit unit-south">
                                 <div class="mini-signal">
                                     <span class="light red active"></span>
@@ -119,7 +116,6 @@
                                 <div class="unit-time" id="sig-S">30 sec</div>
                             </div>
 
-                            <!-- East Unit -->
                             <div class="traffic-unit unit-east">
                                 <div class="unit-label">EAST</div>
                                 <div class="unit-time" id="sig-E">20 sec</div>
@@ -129,7 +125,6 @@
                                 </div>
                             </div>
 
-                            <!-- West Unit -->
                             <div class="traffic-unit unit-west">
                                 <div class="unit-label">WEST</div>
                                 <div class="unit-time" id="sig-W">15 sec</div>
@@ -141,7 +136,6 @@
                         </div>
                     </div>
 
-                    <!-- AI Optimized Signal Timings Table & Result -->
                     <div class="card timings-card">
                         <div class="card-header-flex">
                             <h3><i class="fa-solid fa-brain"></i> AI OPTIMIZED SIGNAL TIMINGS</h3>
@@ -307,7 +301,7 @@
                 </div>
             </section>
 
-            <!-- VIEW 5: SIMULATION -->
+            <!-- VIEW 5: SIMULATION (WITH DIRECT JUNCTION SELECTION) -->
             <section id="view-simulation" class="content-view">
                 <div class="card">
                     <div class="simulation-header">
@@ -321,10 +315,27 @@
                         </div>
                     </div>
 
+                    <!-- Junction Selection for Simulation -->
+                    <div class="dataset-controls mt-4">
+                        <div>
+                            <label for="sim-junction-select"><strong>Select Junction to Simulate:</strong></label>
+                            <select id="sim-junction-select" class="select-input">
+                                <option value="1">Junction 1 (Agent 1 Data)</option>
+                                <option value="2">Junction 2 (Agent 2 Data)</option>
+                                <option value="3">Junction 3 (Agent 3 Data)</option>
+                                <option value="4">Junction 4 (Agent 4 Data)</option>
+                            </select>
+                        </div>
+                        <div id="sim-junction-stats" class="badge-accent">
+                            Junction 1: Avg Vehicles: ~80 | Density: ~50%
+                        </div>
+                    </div>
+
                     <div class="sim-hud">
                         <div>Active Phase: <strong id="sim-active-phase" class="text-success">NORTH GREEN</strong></div>
                         <div>Phase Timer: <strong id="sim-timer">0s</strong></div>
                         <div>Queued Vehicles: <strong id="sim-queue-count">0</strong></div>
+                        <div>Simulated Speed: <strong id="sim-speed-val">49.9 km/h</strong></div>
                     </div>
 
                     <div class="canvas-wrapper">
