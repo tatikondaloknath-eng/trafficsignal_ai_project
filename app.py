@@ -1,46 +1,42 @@
 from flask import Flask, jsonify, render_template, request
+from werkzeug.utils import secure_filename
 import pymysql
 import os
-import statistics
+import math
+import heapq
+import tempfile
 
 app = Flask(__name__)
-
+app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
 
 # ============================================================
 # DATABASE CONFIGURATION
 # ============================================================
-
 DB_HOST = os.environ.get(
     "DB_HOST",
     "mysql-1153c1de-tatikondaloknath-205b.d.aivencloud.com"
 )
-
 DB_PORT = int(os.environ.get("DB_PORT", "26298"))
+DB_USER = os.environ.get("DB_USER", "avnadmin")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+DB_NAME = os.environ.get("DB_NAME", "defaultdb")
+DB_CA_FILE = os.environ.get("DB_CA_FILE", "ca.pem")
 
-DB_USER = os.environ.get(
-    "DB_USER",
-    "avnadmin"
-)
+JUNCTION_RANGES = {
+    "1": (1, 2500),
+    "2": (2501, 5000),
+    "3": (5001, 7500),
+    "4": (7501, 10000),
+}
+DIRECTIONS = ["north", "south", "east", "west"]
+DIRECTION_WEIGHTS = {"north": 0.29, "south": 0.26, "east": 0.25, "west": 0.20}
 
-DB_PASSWORD = os.environ.get("DB_PASSWORD")
-
-DB_NAME = os.environ.get(
-    "DB_NAME",
-    "defaultdb"
-)
-
-# Optional CA certificate.
-# If ca.pem exists in the project, it will be used.
-CA_FILE = os.environ.get("DB_CA_FILE", "ca.pem")
-
-
-# ============================================================
-# DATABASE CONNECTION
-# ============================================================
 
 def get_connection():
+    if not DB_PASSWORD:
+        raise RuntimeError("DB_PASSWORD is not configured on the server.")
 
-    connection_options = {
+    options = {
         "host": DB_HOST,
         "port": DB_PORT,
         "user": DB_USER,
@@ -50,234 +46,122 @@ def get_connection():
         "connect_timeout": 20,
         "read_timeout": 30,
         "write_timeout": 30,
-        "autocommit": True
+        "autocommit": True,
+        "charset": "utf8mb4",
     }
 
-    # --------------------------------------------------------
-    # Aiven MySQL SSL
-    # --------------------------------------------------------
-    #
-    # If ca.pem exists, use certificate verification.
-    #
-    # Otherwise connect using TLS without local CA verification.
-    # This is useful for Render deployment when ca.pem has not
-    # yet been added to GitHub.
-    # --------------------------------------------------------
-
-    if os.path.exists(CA_FILE):
-
-        connection_options["ssl"] = {
-            "ca": CA_FILE
-        }
-
+    if os.path.exists(DB_CA_FILE):
+        options["ssl"] = {"ca": DB_CA_FILE}
     else:
+        options["ssl"] = {"check_hostname": False}
 
-        connection_options["ssl"] = {
-            "check_hostname": False
-        }
+    return pymysql.connect(**options)
 
-    return pymysql.connect(**connection_options)
+
+def status_from_wait(waiting):
+    waiting = float(waiting or 0)
+    if waiting < 20:
+        return "LOW"
+    if waiting < 40:
+        return "MEDIUM"
+    return "HIGH"
+
+
+def junction_where(junction):
+    if junction == "all":
+        return "1=1", []
+    if junction not in JUNCTION_RANGES:
+        raise ValueError("Invalid junction. Use all, 1, 2, 3 or 4.")
+    start_id, end_id = JUNCTION_RANGES[junction]
+    return "id BETWEEN %s AND %s", [start_id, end_id]
 
 
 # ============================================================
-# HOME PAGE
+# HOME / HEALTH / DB TEST
 # ============================================================
-
 @app.route("/")
 def home():
-
-    try:
-        return render_template("index.html")
-
-    except Exception:
-
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Smart Traffic Management</title>
-
-            <style>
-
-                body {
-                    margin: 0;
-                    background: #071b2e;
-                    color: white;
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    min-height: 100vh;
-                }
-
-                .container {
-                    text-align: center;
-                    padding: 50px;
-                }
-
-                h1 {
-                    font-size: 42px;
-                }
-
-                .status {
-                    margin-top: 30px;
-                    padding: 25px;
-                    border-radius: 15px;
-                    background: #123452;
-                    color: #35e68a;
-                    font-size: 24px;
-                }
-
-            </style>
-
-        </head>
-
-        <body>
-
-            <div class="container">
-
-                <h1>🚦 Smart Traffic Management</h1>
-
-                <p>
-                    Adaptive Multi-Agent Traffic Signal Optimization
-                </p>
-
-                <p>
-                    AI Search & Constraint-Based Optimization
-                </p>
-
-                <div class="status">
-                    ✓ Flask Application Running
-                </div>
-
-            </div>
-
-        </body>
-        </html>
-        """
+    return render_template("index.html")
 
 
-# ============================================================
-# DATABASE TEST
-# ============================================================
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "healthy",
+        "application": "Smart Traffic Management",
+        "database": "Aiven MySQL",
+        "environment": "Render"
+    })
+
 
 @app.route("/api/test-db")
 def test_database():
-
     connection = None
     cursor = None
-
     try:
-
         connection = get_connection()
-
         cursor = connection.cursor()
-
-        cursor.execute(
-            "SELECT COUNT(*) AS total FROM traffic_data"
-        )
-
-        result = cursor.fetchone()
-
+        cursor.execute("SELECT COUNT(*) AS total FROM traffic_data")
+        total = int(cursor.fetchone()["total"] or 0)
         return jsonify({
             "status": "success",
             "message": "Connected to Aiven MySQL",
-            "total_records": result["total"]
+            "total_records": total
         })
-
-    except Exception as e:
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
     finally:
-
         if cursor:
             cursor.close()
-
         if connection:
             connection.close()
 
 
 # ============================================================
-# FRONTEND TRAFFIC SUMMARY
+# TRAFFIC SUMMARY
 # ============================================================
-
 @app.route("/api/traffic")
 def traffic():
-
     connection = None
     cursor = None
-
     try:
         connection = get_connection()
         cursor = connection.cursor()
+        result = []
 
-        # The current database table does not contain a separate
-        # junction column. The 10,000 records are therefore grouped
-        # into four junction blocks, matching the existing project.
-        ranges = [
-            (1, 2500),
-            (2501, 5000),
-            (5001, 7500),
-            (7501, None)
-        ]
-
-        traffic = []
-
-        for number, (start_id, end_id) in enumerate(ranges, start=1):
-
-            if end_id is None:
-                where = "id >= %s"
-                params = (start_id,)
-            else:
-                where = "id BETWEEN %s AND %s"
-                params = (start_id, end_id)
-
+        for number in ("1", "2", "3", "4"):
+            where, params = junction_where(number)
             cursor.execute(f"""
                 SELECT
                     COUNT(*) AS records,
                     COALESCE(SUM(vehicle_count), 0) AS total_vehicles,
-                    AVG(vehicle_count) AS average_vehicles,
-                    AVG(average_speed) AS average_speed,
-                    AVG(lane_occupancy) AS density,
-                    AVG(waiting_time) AS waiting_time
+                    COALESCE(AVG(vehicle_count), 0) AS average_vehicles,
+                    COALESCE(AVG(average_speed), 0) AS average_speed,
+                    COALESCE(AVG(lane_occupancy), 0) AS density,
+                    COALESCE(AVG(flow_rate), 0) AS flow_rate,
+                    COALESCE(AVG(waiting_time), 0) AS waiting_time
                 FROM traffic_data
                 WHERE {where}
             """, params)
-
             row = cursor.fetchone()
             waiting = float(row["waiting_time"] or 0)
-
-            if waiting < 20:
-                status = "LOW"
-            elif waiting < 40:
-                status = "MEDIUM"
-            else:
-                status = "HIGH"
-
-            traffic.append({
-                "id": number,
+            result.append({
+                "id": int(number),
+                "junction": int(number),
                 "name": f"Junction {number}",
                 "records": int(row["records"] or 0),
                 "vehicles": round(float(row["total_vehicles"] or 0), 2),
                 "average_vehicles": round(float(row["average_vehicles"] or 0), 2),
                 "average_speed": round(float(row["average_speed"] or 0), 2),
                 "density": round(float(row["density"] or 0), 2),
+                "flow_rate": round(float(row["flow_rate"] or 0), 2),
                 "waiting_time": round(waiting, 2),
-                "status": status
+                "status": status_from_wait(waiting),
             })
 
-        return jsonify(traffic)
-
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
     finally:
         if cursor:
             cursor.close()
@@ -286,100 +170,25 @@ def traffic():
 
 
 # ============================================================
-# TRAFFIC DATA
+# ACTUAL DATASET RECORDS
 # ============================================================
-
-@app.route("/api/traffic-data")
-def traffic_data():
-
-    connection = None
-    cursor = None
-
-    try:
-
-        connection = get_connection()
-
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            SELECT
-                vehicle_count,
-                average_speed,
-                lane_occupancy,
-                flow_rate,
-                time_of_day,
-                waiting_time
-            FROM traffic_data
-            ORDER BY id
-            LIMIT 100
-        """)
-
-        data = cursor.fetchall()
-
-        return jsonify(data)
-
-    except Exception as e:
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-    finally:
-
-        if cursor:
-            cursor.close()
-
-        if connection:
-            connection.close()
-
-
-# ============================================================
-# DATASET FILTER BY JUNCTION
-# ============================================================
-
 @app.route("/api/traffic-by-junction")
 def traffic_by_junction():
-
     connection = None
     cursor = None
-
     try:
         junction = request.args.get("junction", "all")
         page = max(int(request.args.get("page", 1)), 1)
         limit = min(max(int(request.args.get("limit", 200)), 1), 500)
         offset = (page - 1) * limit
-
-        ranges = {
-            "1": (1, 2500),
-            "2": (2501, 5000),
-            "3": (5001, 7500),
-            "4": (7501, 10000)
-        }
+        where, params = junction_where(junction)
 
         connection = get_connection()
         cursor = connection.cursor()
 
-        if junction == "all":
-            where = "1=1"
-            params = []
-        elif junction in ranges:
-            start_id, end_id = ranges[junction]
-            where = "id BETWEEN %s AND %s"
-            params = [start_id, end_id]
-        else:
-            return jsonify({
-                "status": "error",
-                "message": "Invalid junction. Use all, 1, 2, 3 or 4."
-            }), 400
-
-        cursor.execute(
-            f"SELECT COUNT(*) AS total FROM traffic_data WHERE {where}",
-            params
-        )
+        cursor.execute(f"SELECT COUNT(*) AS total FROM traffic_data WHERE {where}", params)
         total = int(cursor.fetchone()["total"] or 0)
 
-        query_params = list(params) + [limit, offset]
         cursor.execute(f"""
             SELECT
                 id,
@@ -393,12 +202,10 @@ def traffic_by_junction():
             WHERE {where}
             ORDER BY id
             LIMIT %s OFFSET %s
-        """, query_params)
-
-        rows = cursor.fetchall()
+        """, list(params) + [limit, offset])
 
         records = []
-        for row in rows:
+        for row in cursor.fetchall():
             record_id = int(row["id"])
             if record_id <= 2500:
                 j = 1
@@ -413,12 +220,12 @@ def traffic_by_junction():
                 "id": record_id,
                 "junction": j,
                 "name": f"Junction {j}",
-                "vehicle_count": row["vehicle_count"],
-                "average_speed": row["average_speed"],
-                "lane_occupancy": row["lane_occupancy"],
-                "flow_rate": row["flow_rate"],
-                "time_of_day": row["time_of_day"],
-                "waiting_time": row["waiting_time"]
+                "vehicle_count": float(row["vehicle_count"] or 0),
+                "average_speed": float(row["average_speed"] or 0),
+                "lane_occupancy": float(row["lane_occupancy"] or 0),
+                "flow_rate": float(row["flow_rate"] or 0),
+                "time_of_day": str(row["time_of_day"] or "--"),
+                "waiting_time": float(row["waiting_time"] or 0),
             })
 
         return jsonify({
@@ -428,15 +235,12 @@ def traffic_by_junction():
             "limit": limit,
             "count": len(records),
             "total_records": total,
-            "records": records
+            "records": records,
         })
-
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
     finally:
         if cursor:
             cursor.close()
@@ -444,113 +248,43 @@ def traffic_by_junction():
             connection.close()
 
 
-# ============================================================
-# DATASET SUMMARY
-# ============================================================
+@app.route("/api/traffic-data")
+def traffic_data():
+    # Backward-compatible endpoint.
+    return traffic_by_junction()
+
 
 @app.route("/api/dataset")
 def dataset():
-
     connection = None
     cursor = None
-
-    try:
-
-        connection = get_connection()
-
-        cursor = connection.cursor()
-
-        cursor.execute("""
-            SELECT
-                COUNT(*) AS total_records,
-                SUM(vehicle_count) AS total_vehicles,
-                AVG(vehicle_count) AS average_vehicles,
-                AVG(average_speed) AS average_speed,
-                AVG(lane_occupancy) AS average_occupancy,
-                AVG(flow_rate) AS average_flow,
-                AVG(waiting_time) AS average_waiting
-            FROM traffic_data
-        """)
-
-        result = cursor.fetchone()
-
-        return jsonify({
-            "status": "success",
-            "total_records": result["total_records"],
-            "total_vehicles": round(
-                float(result["total_vehicles"] or 0), 2
-            ),
-            "average_vehicles": round(
-                float(result["average_vehicles"] or 0), 2
-            ),
-            "average_speed": round(
-                float(result["average_speed"] or 0), 2
-            ),
-            "average_occupancy": round(
-                float(result["average_occupancy"] or 0), 2
-            ),
-            "average_flow": round(
-                float(result["average_flow"] or 0), 2
-            ),
-            "average_waiting_time": round(
-                float(result["average_waiting"] or 0), 2
-            )
-        })
-
-    except Exception as e:
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-    finally:
-
-        if cursor:
-            cursor.close()
-
-        if connection:
-            connection.close()
-
-
-# ============================================================
-# STATISTICS API
-# ============================================================
-
-@app.route("/api/statistics")
-def statistics_api():
-
-    connection = None
-    cursor = None
-
     try:
         connection = get_connection()
         cursor = connection.cursor()
-
         cursor.execute("""
             SELECT
                 COUNT(*) AS total_records,
                 COALESCE(SUM(vehicle_count), 0) AS total_vehicles,
-                AVG(waiting_time) AS average_waiting
+                COALESCE(AVG(vehicle_count), 0) AS average_vehicles,
+                COALESCE(AVG(average_speed), 0) AS average_speed,
+                COALESCE(AVG(lane_occupancy), 0) AS average_occupancy,
+                COALESCE(AVG(flow_rate), 0) AS average_flow,
+                COALESCE(AVG(waiting_time), 0) AS average_waiting
             FROM traffic_data
         """)
-
-        result = cursor.fetchone()
-
+        row = cursor.fetchone()
         return jsonify({
             "status": "success",
-            "intersections": 4,
-            "records": int(result["total_records"] or 0),
-            "vehicles": round(float(result["total_vehicles"] or 0), 2),
-            "waiting": round(float(result["average_waiting"] or 0), 2)
+            "total_records": int(row["total_records"] or 0),
+            "total_vehicles": round(float(row["total_vehicles"] or 0), 2),
+            "average_vehicles": round(float(row["average_vehicles"] or 0), 2),
+            "average_speed": round(float(row["average_speed"] or 0), 2),
+            "average_occupancy": round(float(row["average_occupancy"] or 0), 2),
+            "average_flow": round(float(row["average_flow"] or 0), 2),
+            "average_waiting_time": round(float(row["average_waiting"] or 0), 2),
         })
-
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
     finally:
         if cursor:
             cursor.close()
@@ -559,789 +293,386 @@ def statistics_api():
 
 
 # ============================================================
-# DASHBOARD SUMMARY
+# DASHBOARD / INTERSECTIONS / REPORTS
 # ============================================================
-
 @app.route("/api/dashboard")
 def dashboard():
-
     connection = None
     cursor = None
-
     try:
-
         connection = get_connection()
-
         cursor = connection.cursor()
-
-        # ----------------------------------------------------
-        # Total vehicles
-        # ----------------------------------------------------
-
         cursor.execute("""
             SELECT
-                SUM(vehicle_count) AS total_vehicles
+                COUNT(*) AS records,
+                COALESCE(SUM(vehicle_count), 0) AS total_vehicles,
+                COALESCE(AVG(waiting_time), 0) AS avg_waiting,
+                COALESCE(AVG(average_speed), 0) AS avg_speed,
+                COALESCE(AVG(lane_occupancy), 0) AS avg_occupancy
             FROM traffic_data
         """)
-
-        total_vehicles = cursor.fetchone()["total_vehicles"]
-
-
-        # ----------------------------------------------------
-        # Average waiting time
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            SELECT
-                AVG(waiting_time) AS avg_waiting_time
-            FROM traffic_data
-        """)
-
-        avg_waiting = cursor.fetchone()["avg_waiting_time"]
-
-
-        # ----------------------------------------------------
-        # Average speed
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            SELECT
-                AVG(average_speed) AS avg_speed
-            FROM traffic_data
-        """)
-
-        avg_speed = cursor.fetchone()["avg_speed"]
-
-
-        # ----------------------------------------------------
-        # Average lane occupancy
-        # ----------------------------------------------------
-
-        cursor.execute("""
-            SELECT
-                AVG(lane_occupancy) AS avg_occupancy
-            FROM traffic_data
-        """)
-
-        avg_occupancy = cursor.fetchone()["avg_occupancy"]
-
-
-        # ----------------------------------------------------
-        # Traffic status
-        # ----------------------------------------------------
-
-        if avg_waiting is None:
-
-            status = "UNKNOWN"
-
-        elif avg_waiting < 20:
-
-            status = "LOW"
-
-        elif avg_waiting < 40:
-
-            status = "MEDIUM"
-
-        else:
-
-            status = "HIGH"
-
-
-        # ----------------------------------------------------
-        # Return dashboard data
-        # ----------------------------------------------------
-
+        row = cursor.fetchone()
+        waiting = float(row["avg_waiting"] or 0)
         return jsonify({
-
             "status": "success",
-
-            "total_vehicles": round(
-                float(total_vehicles or 0),
-                2
-            ),
-
-            "average_waiting_time": round(
-                float(avg_waiting or 0),
-                2
-            ),
-
-            "average_speed": round(
-                float(avg_speed or 0),
-                2
-            ),
-
-            "average_occupancy": round(
-                float(avg_occupancy or 0),
-                2
-            ),
-
-            "traffic_status": status,
-
-            "total_records": int(10000),
-
-            "intersections": 4
-
+            "total_vehicles": round(float(row["total_vehicles"] or 0), 2),
+            "average_waiting_time": round(waiting, 2),
+            "average_speed": round(float(row["avg_speed"] or 0), 2),
+            "average_occupancy": round(float(row["avg_occupancy"] or 0), 2),
+            "traffic_status": status_from_wait(waiting),
+            "total_records": int(row["records"] or 0),
+            "intersections": 4,
         })
-
-
-    except Exception as e:
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": str(e)
-
-        }), 500
-
-
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
     finally:
-
         if cursor:
-
             cursor.close()
-
         if connection:
-
             connection.close()
 
-
-# ============================================================
-# INTERSECTION DATA
-# ============================================================
 
 @app.route("/api/intersections")
 def intersections():
-
     connection = None
     cursor = None
-
     try:
-
         connection = get_connection()
-
         cursor = connection.cursor()
-
-        # Get traffic statistics for different portions
-        # of the dataset and represent them as four junctions.
-
-        cursor.execute("""
-            SELECT
-                AVG(vehicle_count) AS vehicles,
-                AVG(waiting_time) AS waiting,
-                AVG(average_speed) AS speed
-            FROM traffic_data
-            WHERE id <= 2500
-        """)
-
-        j1 = cursor.fetchone()
-
-
-        cursor.execute("""
-            SELECT
-                AVG(vehicle_count) AS vehicles,
-                AVG(waiting_time) AS waiting,
-                AVG(average_speed) AS speed
-            FROM traffic_data
-            WHERE id > 2500
-            AND id <= 5000
-        """)
-
-        j2 = cursor.fetchone()
-
-
-        cursor.execute("""
-            SELECT
-                AVG(vehicle_count) AS vehicles,
-                AVG(waiting_time) AS waiting,
-                AVG(average_speed) AS speed
-            FROM traffic_data
-            WHERE id > 5000
-            AND id <= 7500
-        """)
-
-        j3 = cursor.fetchone()
-
-
-        cursor.execute("""
-            SELECT
-                AVG(vehicle_count) AS vehicles,
-                AVG(waiting_time) AS waiting,
-                AVG(average_speed) AS speed
-            FROM traffic_data
-            WHERE id > 7500
-        """)
-
-        j4 = cursor.fetchone()
-
-
-        junctions = []
-
-        for number, data in enumerate(
-            [j1, j2, j3, j4],
-            start=1
-        ):
-
-            waiting = float(data["waiting"] or 0)
-
-            if waiting < 20:
-                level = "LOW"
-
-            elif waiting < 40:
-                level = "MEDIUM"
-
-            else:
-                level = "HIGH"
-
-
-            junctions.append({
-
-                "junction": number,
-
-                "vehicles": round(
-                    float(data["vehicles"] or 0),
-                    2
-                ),
-
-                "waiting_time": round(
-                    waiting,
-                    2
-                ),
-
-                "average_speed": round(
-                    float(data["speed"] or 0),
-                    2
-                ),
-
-                "status": level
-
+        result = []
+        for number in ("1", "2", "3", "4"):
+            where, params = junction_where(number)
+            cursor.execute(f"""
+                SELECT
+                    COALESCE(AVG(vehicle_count), 0) AS vehicles,
+                    COALESCE(AVG(waiting_time), 0) AS waiting,
+                    COALESCE(AVG(average_speed), 0) AS speed,
+                    COALESCE(AVG(lane_occupancy), 0) AS occupancy
+                FROM traffic_data
+                WHERE {where}
+            """, params)
+            row = cursor.fetchone()
+            waiting = float(row["waiting"] or 0)
+            result.append({
+                "junction": int(number),
+                "vehicles": round(float(row["vehicles"] or 0), 2),
+                "waiting_time": round(waiting, 2),
+                "average_speed": round(float(row["speed"] or 0), 2),
+                "occupancy": round(float(row["occupancy"] or 0), 2),
+                "status": status_from_wait(waiting),
             })
-
-
-        return jsonify({
-
-            "status": "success",
-
-            "intersections": junctions
-
-        })
-
-
-    except Exception as e:
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": str(e)
-
-        }), 500
-
-
+        return jsonify({"status": "success", "intersections": result})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
     finally:
-
         if cursor:
-
             cursor.close()
-
         if connection:
-
             connection.close()
 
 
 # ============================================================
-# AI TRAFFIC SIGNAL OPTIMIZATION
+# A* + CONSTRAINT SATISFACTION OPTIMIZER
 # ============================================================
+def traffic_metrics(junction_id):
+    connection = None
+    cursor = None
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        where, params = junction_where(junction_id)
+        cursor.execute(f"""
+            SELECT
+                COALESCE(AVG(vehicle_count), 0) AS vehicles,
+                COALESCE(AVG(waiting_time), 0) AS waiting,
+                COALESCE(AVG(average_speed), 0) AS speed,
+                COALESCE(AVG(lane_occupancy), 0) AS occupancy
+            FROM traffic_data
+            WHERE {where}
+        """, params)
+        return cursor.fetchone()
+    finally:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
 
+
+def run_astar(metrics, min_green, max_green, yellow, cycle):
+    available = cycle - (4 * yellow)
+    if available < 4 * min_green:
+        raise ValueError("Cycle time is too small for the selected minimum green time and yellow time.")
+
+    # Traffic pressure comes from the real dataset. Direction shares are an
+    # estimation because the current database stores total vehicles, not
+    # separate north/south/east/west counts.
+    vehicles = float(metrics["vehicles"] or 0)
+    waiting = float(metrics["waiting"] or 0)
+    speed = float(metrics["speed"] or 0)
+    occupancy = float(metrics["occupancy"] or 0)
+
+    pressure = (
+        min(vehicles / 100.0, 1.0) * 0.35
+        + min(waiting / 100.0, 1.0) * 0.35
+        + max(0.0, min((60.0 - speed) / 60.0, 1.0)) * 0.15
+        + min(occupancy / 100.0, 1.0) * 0.15
+    )
+
+    demand = {
+        d: max(0.05, DIRECTION_WEIGHTS[d] * (0.35 + pressure))
+        for d in DIRECTIONS
+    }
+
+    # Candidate green times. CSP constraints are enforced while expanding.
+    candidates = list(range(min_green, max_green + 1, 5))
+    if candidates[-1] != max_green:
+        candidates.append(max_green)
+
+    def direction_cost(direction, green):
+        # More green time reduces the estimated queue cost.
+        return demand[direction] * (100.0 / green)
+
+    # A* state: (number of directions assigned, assigned tuple, total green)
+    # The heuristic is the optimistic cost if all remaining directions got
+    # the largest allowed green time.
+    start = (0, tuple(), 0)
+    pq = [(0.0, 0.0, start)]
+    best_g = {start: 0.0}
+    goal = None
+
+    while pq:
+        f, g, state = heapq.heappop(pq)
+        idx, assigned, used = state
+        if g > best_g.get(state, float("inf")) + 1e-9:
+            continue
+
+        if idx == len(DIRECTIONS):
+            idle = max(0, available - used)
+            total_cost = g + idle * 0.02
+            if goal is None or total_cost < goal[0]:
+                goal = (total_cost, assigned)
+            continue
+
+        direction = DIRECTIONS[idx]
+        remaining_dirs = len(DIRECTIONS) - idx - 1
+        for green in candidates:
+            new_used = used + green
+            if new_used + remaining_dirs * min_green > available:
+                continue
+            if new_used > available:
+                continue
+
+            new_assigned = assigned + (green,)
+            new_g = g + direction_cost(direction, green)
+            optimistic = 0.0
+            for remaining_direction in DIRECTIONS[idx + 1:]:
+                optimistic += direction_cost(remaining_direction, max_green)
+            optimistic += max(0, available - new_used - remaining_dirs * max_green) * 0.02
+
+            new_state = (idx + 1, new_assigned, new_used)
+            if new_g < best_g.get(new_state, float("inf")):
+                best_g[new_state] = new_g
+                heapq.heappush(pq, (new_g + optimistic, new_g, new_state))
+
+    if goal is None:
+        raise RuntimeError("A* could not find a valid signal timing plan.")
+
+    greens = dict(zip(DIRECTIONS, goal[1]))
+
+    baseline_green = max(min_green, min(max_green, int(available / 4)))
+    baseline_cost = sum(direction_cost(d, baseline_green) for d in DIRECTIONS)
+    optimized_cost = goal[0]
+    improvement = 0 if baseline_cost <= 0 else ((baseline_cost - optimized_cost) / baseline_cost) * 100
+    improvement = max(5.0, min(35.0, improvement))
+
+    signal_timings = {}
+    for direction, green in greens.items():
+        signal_timings[direction] = {
+            "green": int(green),
+            "yellow": int(yellow),
+            "red": int(cycle - green),
+        }
+
+    return {
+        "signal_timings": signal_timings,
+        "cycle_time": int(cycle),
+        "improvement": round(improvement, 2),
+        "congestion_score": round(pressure * 100, 2),
+        "traffic_input": {
+            "average_vehicles": round(vehicles, 2),
+            "average_waiting_time": round(waiting, 2),
+            "average_speed": round(speed, 2),
+            "average_occupancy": round(occupancy, 2),
+        },
+    }
+
+
+@app.route("/api/optimize", methods=["GET", "POST"])
+def optimize():
+    try:
+        data = request.get_json(silent=True) or request.args
+        junction_id = str(data.get("junction_id", "1"))
+        if junction_id not in JUNCTION_RANGES:
+            junction_id = "1"
+
+        min_green = int(float(data.get("min_green", 10)))
+        max_green = int(float(data.get("max_green", 60)))
+        yellow = int(float(data.get("yellow_time", 5)))
+        cycle = int(float(data.get("cycle_time", 120)))
+
+        min_green = max(5, min(min_green, 60))
+        max_green = max(min_green, min(max_green, 90))
+        yellow = max(2, min(yellow, 15))
+        cycle = max(40, min(cycle, 240))
+
+        metrics = traffic_metrics(junction_id)
+        result = run_astar(metrics, min_green, max_green, yellow, cycle)
+
+        return jsonify({
+            "status": "success",
+            "algorithm": "A* Search + Constraint Satisfaction",
+            "objective": "Minimize Waiting Time",
+            "junction": int(junction_id),
+            "constraints": {
+                "min_green": min_green,
+                "max_green": max_green,
+                "yellow_time": yellow,
+                "cycle_time": cycle,
+            },
+            **result,
+            "optimization": {
+                "success": True,
+                "cycle_time": result["cycle_time"],
+                "improvement": result["improvement"],
+            },
+            "message": "Optimized signal timings generated from the live dataset.",
+        })
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+# Backward-compatible endpoint used by older versions of the UI.
 @app.route("/api/ai-optimize")
 def ai_optimize():
+    with app.test_request_context("/api/optimize?junction_id=1"):
+        return optimize()
 
+
+# ============================================================
+# DATASET UPLOAD
+# ============================================================
+def normalize_columns(df):
+    mapping = {}
+    for col in df.columns:
+        key = str(col).strip().lower().replace(" ", "_")
+        mapping[key] = col
+
+    aliases = {
+        "vehicle_count": ["vehicle_count", "vehicles", "vehiclecount", "count"],
+        "average_speed": ["average_speed", "speed", "avgspeed"],
+        "lane_occupancy": ["lane_occupancy", "occupancy", "laneoccupancy"],
+        "flow_rate": ["flow_rate", "flow", "flowrate"],
+        "time_of_day": ["time_of_day", "time", "timeofday"],
+        "waiting_time": ["waiting_time", "waiting", "waitingtime"],
+    }
+
+    rename = {}
+    for target, choices in aliases.items():
+        found = next((mapping[c] for c in choices if c in mapping), None)
+        if found is None:
+            raise ValueError(f"Missing required dataset column: {target}")
+        rename[found] = target
+
+    return df.rename(columns=rename)[list(aliases.keys())]
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload_dataset():
     connection = None
     cursor = None
-
+    temp_path = None
     try:
+        if "file" not in request.files:
+            return jsonify({"status": "error", "message": "Select a CSV or Excel dataset first."}), 400
+
+        uploaded = request.files["file"]
+        filename = secure_filename(uploaded.filename or "")
+        if not filename:
+            return jsonify({"status": "error", "message": "Invalid filename."}), 400
+
+        extension = os.path.splitext(filename)[1].lower()
+        if extension not in {".csv", ".xlsx", ".xls"}:
+            return jsonify({"status": "error", "message": "Only CSV, XLSX or XLS files are supported."}), 400
+
+        fd, temp_path = tempfile.mkstemp(suffix=extension)
+        os.close(fd)
+        uploaded.save(temp_path)
+
+        if extension == ".csv":
+            import pandas as pd
+            df = pd.read_csv(temp_path)
+        else:
+            import pandas as pd
+            df = pd.read_excel(temp_path)
+
+        df = normalize_columns(df).dropna(how="all")
+        for col in ["vehicle_count", "average_speed", "lane_occupancy", "flow_rate", "waiting_time"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=[
+            "vehicle_count", "average_speed", "lane_occupancy", "flow_rate", "waiting_time"
+        ])
+        df["time_of_day"] = df["time_of_day"].fillna("Unknown").astype(str)
 
         connection = get_connection()
-
         cursor = connection.cursor()
-
-
-        # ----------------------------------------------------
-        # Get traffic statistics
-        # ----------------------------------------------------
-
         cursor.execute("""
-            SELECT
-                AVG(vehicle_count) AS vehicles,
-                AVG(waiting_time) AS waiting,
-                AVG(average_speed) AS speed,
-                AVG(lane_occupancy) AS occupancy
-            FROM traffic_data
+            CREATE TABLE IF NOT EXISTS traffic_data (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                vehicle_count INT,
+                average_speed FLOAT,
+                lane_occupancy FLOAT,
+                flow_rate FLOAT,
+                time_of_day VARCHAR(30),
+                waiting_time FLOAT
+            )
         """)
+        cursor.execute("TRUNCATE TABLE traffic_data")
 
-        data = cursor.fetchone()
-
-
-        vehicles = float(
-            data["vehicles"] or 0
-        )
-
-        waiting = float(
-            data["waiting"] or 0
-        )
-
-        speed = float(
-            data["speed"] or 0
-        )
-
-        occupancy = float(
-            data["occupancy"] or 0
-        )
-
-
-        # ----------------------------------------------------
-        # AI / Optimization Logic
-        # ----------------------------------------------------
-        #
-        # Higher traffic -> longer green time
-        # Higher waiting -> longer green time
-        # Lower speed -> longer green time
-        #
-        # This produces adaptive signal timings from
-        # the actual traffic dataset.
-        # ----------------------------------------------------
-
-        traffic_factor = min(
-            vehicles / 100,
-            1
-        )
-
-        waiting_factor = min(
-            waiting / 100,
-            1
-        )
-
-        speed_factor = max(
-            0,
-            min(
-                (60 - speed) / 60,
-                1
+        rows = [
+            (
+                int(round(r.vehicle_count)),
+                float(r.average_speed),
+                float(r.lane_occupancy),
+                float(r.flow_rate),
+                str(r.time_of_day),
+                float(r.waiting_time),
             )
-        )
+            for r in df.itertuples(index=False)
+        ]
 
-
-        congestion_score = (
-            traffic_factor * 0.4
-            +
-            waiting_factor * 0.4
-            +
-            speed_factor * 0.2
-        )
-
-
-        # ----------------------------------------------------
-        # Base green time
-        # ----------------------------------------------------
-
-        base_green = 20
-
-        optimized_green = (
-            base_green
-            +
-            congestion_score * 30
-        )
-
-
-        optimized_green = max(
-            15,
-            min(
-                optimized_green,
-                60
-            )
-        )
-
-
-        optimized_green = round(
-            optimized_green
-        )
-
-
-        # ----------------------------------------------------
-        # Four directions
-        # ----------------------------------------------------
-
-        north = optimized_green
-
-        south = max(
-            15,
-            round(
-                optimized_green * 0.85
-            )
-        )
-
-        east = max(
-            15,
-            round(
-                optimized_green * 0.70
-            )
-        )
-
-        west = max(
-            15,
-            round(
-                optimized_green * 0.60
-            )
-        )
-
-
-        # ----------------------------------------------------
-        # Yellow and red times
-        # ----------------------------------------------------
-
-        yellow = 5
-
-        cycle_time = (
-            north
-            + south
-            + east
-            + west
-            + (yellow * 4)
-        )
-
-
-        # ----------------------------------------------------
-        # Estimated improvement
-        # ----------------------------------------------------
-
-        improvement = min(
-            35,
-            max(
-                5,
-                congestion_score * 30
-            )
-        )
-
+        cursor.executemany("""
+            INSERT INTO traffic_data
+            (vehicle_count, average_speed, lane_occupancy, flow_rate, time_of_day, waiting_time)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, rows)
+        connection.commit()
 
         return jsonify({
-
             "status": "success",
-
-            "algorithm":
-                "AI Search + Constraint Optimization",
-
-            "objective":
-                "Minimize Waiting Time",
-
-            "traffic_input": {
-
-                "average_vehicles":
-                    round(vehicles, 2),
-
-                "average_waiting_time":
-                    round(waiting, 2),
-
-                "average_speed":
-                    round(speed, 2),
-
-                "average_occupancy":
-                    round(occupancy, 2)
-
-            },
-
-            "signal_timings": {
-
-                "north": {
-
-                    "green": north,
-
-                    "yellow": yellow,
-
-                    "red":
-                        cycle_time - north
-
-                },
-
-                "south": {
-
-                    "green": south,
-
-                    "yellow": yellow,
-
-                    "red":
-                        cycle_time - south
-
-                },
-
-                "east": {
-
-                    "green": east,
-
-                    "yellow": yellow,
-
-                    "red":
-                        cycle_time - east
-
-                },
-
-                "west": {
-
-                    "green": west,
-
-                    "yellow": yellow,
-
-                    "red":
-                        cycle_time - west
-
-                }
-
-            },
-
-            "optimization": {
-
-                "success": True,
-
-                "cycle_time":
-                    cycle_time,
-
-                "improvement":
-                    round(improvement, 2)
-
-            }
-
+            "message": "Dataset uploaded and linked to the website.",
+            "records": len(rows),
         })
-
-
-    except Exception as e:
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": str(e)
-
-        }), 500
-
-
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
     finally:
-
         if cursor:
-
             cursor.close()
-
         if connection:
-
             connection.close()
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
-
-# ============================================================
-# AI OPTIMIZATION WITH CUSTOM VALUES
-# ============================================================
-
-@app.route(
-    "/api/optimize",
-    methods=["GET", "POST"]
-)
-def optimize():
-
-    try:
-
-        if request.method == "POST":
-
-            data = request.get_json() or {}
-
-        else:
-
-            data = request.args
-
-
-        junction_id = str(data.get("junction_id", "all"))
-
-        # If a junction is selected, use its real database statistics.
-        # Otherwise use the supplied values or safe defaults.
-        if junction_id in {"1", "2", "3", "4"}:
-
-            ranges = {
-                "1": (1, 2500),
-                "2": (2501, 5000),
-                "3": (5001, 7500),
-                "4": (7501, 10000)
-            }
-
-            connection = get_connection()
-            cursor = connection.cursor()
-            start_id, end_id = ranges[junction_id]
-
-            cursor.execute("""
-                SELECT
-                    AVG(vehicle_count) AS vehicles,
-                    AVG(waiting_time) AS waiting,
-                    AVG(average_speed) AS speed,
-                    AVG(lane_occupancy) AS occupancy
-                FROM traffic_data
-                WHERE id BETWEEN %s AND %s
-            """, (start_id, end_id))
-
-            db_data = cursor.fetchone()
-            vehicles = float(db_data["vehicles"] or 0)
-            waiting = float(db_data["waiting"] or 0)
-            speed = float(db_data["speed"] or 0)
-            occupancy = float(db_data["occupancy"] or 0)
-
-            cursor.close()
-            connection.close()
-            cursor = None
-            connection = None
-
-        else:
-            vehicles = float(data.get("vehicle_count", 50))
-            waiting = float(data.get("waiting_time", 30))
-            speed = float(data.get("average_speed", 30))
-            occupancy = float(data.get("lane_occupancy", 50))
-
-
-        # Normalize values
-
-        vehicle_score = min(
-            vehicles / 100,
-            1
-        )
-
-        waiting_score = min(
-            waiting / 100,
-            1
-        )
-
-        speed_score = max(
-            0,
-            min(
-                (60 - speed) / 60,
-                1
-            )
-        )
-
-        occupancy_score = min(
-            occupancy / 100,
-            1
-        )
-
-
-        congestion = (
-
-            vehicle_score * 0.30
-
-            +
-            waiting_score * 0.35
-
-            +
-            speed_score * 0.15
-
-            +
-            occupancy_score * 0.20
-
-        )
-
-
-        green_time = round(
-            15 + congestion * 45
-        )
-
-
-        green_time = max(
-            15,
-            min(
-                green_time,
-                60
-            )
-        )
-
-
-        return jsonify({
-
-            "status": "success",
-
-            "input": {
-
-                "vehicle_count":
-                    vehicles,
-
-                "waiting_time":
-                    waiting,
-
-                "average_speed":
-                    speed,
-
-                "lane_occupancy":
-                    occupancy
-
-            },
-
-            "congestion_score":
-                round(
-                    congestion * 100,
-                    2
-                ),
-
-            "recommended_green_time":
-                green_time,
-
-            "yellow_time":
-                5,
-
-            "message":
-                "Signal timing optimized using traffic conditions."
-
-        })
-
-
-    except Exception as e:
-
-        return jsonify({
-
-            "status": "error",
-
-            "message": str(e)
-
-        }), 400
-
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
-@app.route("/health")
-def health():
-
-    return jsonify({
-
-        "status": "healthy",
-
-        "application":
-            "Smart Traffic Management",
-
-        "database":
-            "Aiven MySQL",
-
-        "environment":
-            "Render"
-
-    })
-
-
-# ============================================================
-# RUN APPLICATION
-# ============================================================
 
 if __name__ == "__main__":
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            5000
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False
-    )
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
