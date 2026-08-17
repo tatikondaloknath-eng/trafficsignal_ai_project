@@ -1,50 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Traffic Management System</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-</head>
-<body>
-    <div class="app-layout">
-        <!-- Sidebar Navigation -->
-        <aside class="sidebar">
-            <div class="brand">
-                <i class="fa-solid fa-traffic-light brand-icon"></i>
-                <div>
-                    <h2>SmartTraffic</h2>
-                    <span>AI Optimization</span>
-                </div>
-            </div>
-            <nav class="nav-links">
-                <button class="nav-item active" data-view="dashboard"><i class="fa-solid fa-chart-line"></i> Dashboard</button>
-                <button class="nav-item" data-view="dataset"><i class="fa-solid fa-database"></i> Dataset</button>
-                <button class="nav-item" data-view="intersections"><i class="fa-solid fa-code-branch"></i> Intersections</button>
-                <button class="nav-item" data-view="optimization"><i class="fa-solid fa-brain"></i> AI Optimization</button>
-                <button class="nav-item" data-view="simulation"><i class="fa-solid fa-car-side"></i> Simulation</button>
-                <button class="nav-item" data-view="reports"><i class="fa-solid fa-file-waveform"></i> Reports</button>
-                <button class="nav-item" data-view="settings"><i class="fa-solid fa-sliders"></i> Settings</button>
-            </nav>
-            <div class="system-status-indicator">
-                <span class="status-dot"></span> System Live & Connected
-            </div>
-        </aside>
-
-        <!-- Main Content Body -->
-        <main class="main-container">
-            <header class="topbar">
-                <div>
-                    <h1 id="page-title">Traffic Dashboard</h1>
-                    <p class="subtitle">Adaptive Multi-Agent Traffic Signal Optimization</p>
-                </div>
-                <div class="topbar-actions">
-                    <button class="btn btn-secondary" id="refresh-global-btn"><i class="fa-solid fa-rotate"></i> Refresh</button>
-                </div>
-            </header>
-
-            <!-- VIEW: DASHBOARD -->
+<!-- VIEW: DASHBOARD -->
             <section id="view-dashboard" class="content-view active">
                 <div class="metrics-grid">
                     <div class="metric-card">
@@ -80,199 +34,131 @@
                 <div class="section-title"><h3>Junction Overview</h3></div>
                 <div class="junction-grid" id="dash-junctions-container"></div>
 
-                <div class="dashboard-split">
-                    <div class="card">
-                        <h3><i class="fa-solid fa-satellite-dish"></i> Live Intersection Timings</h3>
-                        <div class="signals-display-grid" id="live-signals-box">
-                            <div class="signal-badge north">NORTH <b id="sig-N">40s</b></div>
-                            <div class="signal-badge south">SOUTH <b id="sig-S">30s</b></div>
-                            <div class="signal-badge east">EAST <b id="sig-E">20s</b></div>
-                            <div class="signal-badge west">WEST <b id="sig-W">15s</b></div>
+                <!-- LIVE INTERSECTION ROAD GRAPHIC & AI TIMINGS -->
+                <div class="dashboard-intersection-row">
+                    <!-- Road Crossroad Graphic -->
+                    <div class="card road-card">
+                        <div class="card-header-flex">
+                            <h3><i class="fa-solid fa-traffic-light"></i> LIVE INTERSECTION</h3>
+                            <span class="badge-accent">Junction 1</span>
                         </div>
-                    </div>
-                    <div class="card">
-                        <h3><i class="fa-solid fa-bolt"></i> Optimization Engine Status</h3>
-                        <div class="engine-status-box">
-                            <p><strong>Algorithm:</strong> A* Search + Constraint Satisfaction</p>
-                            <p><strong>Objective:</strong> Minimize Overall Waiting Queue</p>
-                            <p><strong>Improvement Score:</strong> <span class="badge-accent">+18.7%</span></p>
-                        </div>
-                    </div>
-                </div>
-            </section>
 
-            <!-- VIEW: DATASET -->
-            <section id="view-dataset" class="content-view">
-                <div class="card">
-                    <div class="dataset-controls">
-                        <div>
-                            <label for="dataset-junction-select"><strong>Select Junction:</strong></label>
-                            <select id="dataset-junction-select" class="select-input">
-                                <option value="all">All Junctions</option>
-                                <option value="1">Junction 1</option>
-                                <option value="2">Junction 2</option>
-                                <option value="3">Junction 3</option>
-                                <option value="4">Junction 4</option>
-                            </select>
-                        </div>
-                        <div class="dataset-records-count">
-                            Total Records: <strong id="dataset-records-total">0</strong>
-                        </div>
-                    </div>
-
-                    <div class="table-container">
-                        <table class="styled-table" id="dataset-table">
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>Junction</th>
-                                    <th>Vehicles</th>
-                                    <th>Avg Speed (km/h)</th>
-                                    <th>Occupancy (%)</th>
-                                    <th>Flow Rate</th>
-                                    <th>Time of Day</th>
-                                    <th>Waiting Time (s)</th>
-                                </tr>
-                            </thead>
-                            <tbody id="dataset-table-body">
-                                <tr><td colspan="8" class="text-center">Loading dataset...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <div class="pagination-bar">
-                        <button class="btn btn-secondary" id="page-prev-btn"><i class="fa-solid fa-chevron-left"></i> Previous</button>
-                        <span id="page-indicator">Page 1 of 1</span>
-                        <button class="btn btn-secondary" id="page-next-btn">Next <i class="fa-solid fa-chevron-right"></i></button>
-                    </div>
-                </div>
-            </section>
-
-            <!-- VIEW: INTERSECTIONS -->
-            <section id="view-intersections" class="content-view">
-                <div class="junction-grid" id="intersections-page-container"></div>
-            </section>
-
-            <!-- VIEW: AI OPTIMIZATION -->
-            <section id="view-optimization" class="content-view">
-                <div class="card">
-                    <h3>AI Traffic Optimization Engine</h3>
-                    <p class="mb-4">Performs heuristic A* state-space search bounded by traffic flow constraints to determine optimal phase durations per intersection agent.</p>
-                    <div class="controls-row mb-4">
-                        <select id="opt-junction-select" class="select-input">
-                            <option value="1">Junction 1 (Agent 1)</option>
-                            <option value="2">Junction 2 (Agent 2)</option>
-                            <option value="3">Junction 3 (Agent 3)</option>
-                            <option value="4">Junction 4 (Agent 4)</option>
-                        </select>
-                        <button class="btn btn-primary" id="run-opt-btn"><i class="fa-solid fa-brain"></i> Run AI Optimization</button>
-                    </div>
-
-                    <div class="optimization-results-panel" id="opt-results-panel">
-                        <div class="metrics-grid">
-                            <div class="metric-card">
-                                <div><span class="metric-label">ALGORITHM</span><h3>A* + CSP</h3></div>
+                        <div class="intersection-map">
+                            <!-- Road Background Layers -->
+                            <div class="road road-v"></div>
+                            <div class="road road-h"></div>
+                            <div class="intersection-core">
+                                <span class="arrow arrow-up"><i class="fa-solid fa-arrow-up"></i></span>
+                                <span class="arrow arrow-down"><i class="fa-solid fa-arrow-down"></i></span>
+                                <span class="arrow arrow-left"><i class="fa-solid fa-arrow-left"></i></span>
+                                <span class="arrow arrow-right"><i class="fa-solid fa-arrow-right"></i></span>
                             </div>
-                            <div class="metric-card">
-                                <div><span class="metric-label">CYCLE TIME</span><h3 id="opt-cycle-disp">120s</h3></div>
+
+                            <!-- North Signal Box -->
+                            <div class="traffic-unit unit-north">
+                                <div class="unit-label">NORTH</div>
+                                <div class="unit-time" id="sig-N">40 sec</div>
+                                <div class="mini-signal">
+                                    <span class="light red"></span>
+                                    <span class="light green active"></span>
+                                </div>
                             </div>
-                            <div class="metric-card">
-                                <div><span class="metric-label">IMPROVEMENT</span><h3 class="text-success" id="opt-impr-disp">--</h3></div>
+
+                            <!-- South Signal Box -->
+                            <div class="traffic-unit unit-south">
+                                <div class="mini-signal">
+                                    <span class="light red active"></span>
+                                    <span class="light green"></span>
+                                </div>
+                                <div class="unit-label">SOUTH</div>
+                                <div class="unit-time" id="sig-S">30 sec</div>
+                            </div>
+
+                            <!-- East Signal Box -->
+                            <div class="traffic-unit unit-east">
+                                <div class="unit-label">EAST</div>
+                                <div class="unit-time" id="sig-E">20 sec</div>
+                                <div class="mini-signal">
+                                    <span class="light red"></span>
+                                    <span class="light green active"></span>
+                                </div>
+                            </div>
+
+                            <!-- West Signal Box -->
+                            <div class="traffic-unit unit-west">
+                                <div class="unit-label">WEST</div>
+                                <div class="unit-time" id="sig-W">15 sec</div>
+                                <div class="mini-signal">
+                                    <span class="light red active"></span>
+                                    <span class="light green"></span>
+                                </div>
                             </div>
                         </div>
+                    </div>
 
-                        <div class="table-container mt-4">
-                            <table class="styled-table">
+                    <!-- AI Optimized Signal Timings Table & Result -->
+                    <div class="card timings-card">
+                        <div class="card-header-flex">
+                            <h3><i class="fa-solid fa-brain"></i> AI OPTIMIZED SIGNAL TIMINGS</h3>
+                            <span class="badge-accent">AI</span>
+                        </div>
+
+                        <div class="table-container">
+                            <table class="styled-table compact-table">
                                 <thead>
                                     <tr>
-                                        <th>Direction Phase</th>
-                                        <th>Green Duration</th>
-                                        <th>Yellow Duration</th>
-                                        <th>Red Duration</th>
+                                        <th>Direction</th>
+                                        <th>Green</th>
+                                        <th>Yellow</th>
+                                        <th>Red</th>
                                     </tr>
                                 </thead>
-                                <tbody id="opt-table-body">
-                                    <tr><td colspan="4" class="text-center">Click "Run AI Optimization" to evaluate.</td></tr>
+                                <tbody>
+                                    <tr>
+                                        <td>North</td>
+                                        <td class="text-success"><b id="tbl-n-g">40 sec</b></td>
+                                        <td>5 sec</td>
+                                        <td>55 sec</td>
+                                    </tr>
+                                    <tr>
+                                        <td>South</td>
+                                        <td class="text-success"><b id="tbl-s-g">30 sec</b></td>
+                                        <td>5 sec</td>
+                                        <td>65 sec</td>
+                                    </tr>
+                                    <tr>
+                                        <td>East</td>
+                                        <td class="text-success"><b id="tbl-e-g">20 sec</b></td>
+                                        <td>5 sec</td>
+                                        <td>75 sec</td>
+                                    </tr>
+                                    <tr>
+                                        <td>West</td>
+                                        <td class="text-success"><b id="tbl-w-g">15 sec</b></td>
+                                        <td>5 sec</td>
+                                        <td>80 sec</td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
+
+                        <div class="opt-summary-box">
+                            <div class="summary-line">
+                                <span>Optimization Result</span>
+                                <span class="badge-success">SUCCESS</span>
+                            </div>
+                            <div class="summary-details">
+                                <p><span>Algorithm:</span> <strong>A* Search + CSP</strong></p>
+                                <p><span>Objective:</span> <strong>Minimize Waiting Time</strong></p>
+                                <p><span>Cycle Time:</span> <strong>120 sec</strong></p>
+                                <p><span>Improvement:</span> <strong class="text-success">+18.7%</strong></p>
+                            </div>
+                        </div>
+
+                        <div class="dashboard-actions">
+                            <button class="btn btn-primary" id="dash-opt-btn"><i class="fa-solid fa-play"></i> Run AI Optimization</button>
+                            <button class="btn btn-success"><i class="fa-solid fa-check"></i> Apply Constraints</button>
+                        </div>
                     </div>
                 </div>
             </section>
-
-            <!-- VIEW: SIMULATION -->
-            <section id="view-simulation" class="content-view">
-                <div class="card">
-                    <div class="simulation-header">
-                        <div>
-                            <h3>Real-Time Microscopic Traffic Simulation</h3>
-                            <p>Demonstrates queue clearance dynamics under AI-optimized timing allocations.</p>
-                        </div>
-                        <div class="sim-controls">
-                            <button class="btn btn-success" id="sim-start-btn"><i class="fa-solid fa-play"></i> Start Simulation</button>
-                            <button class="btn btn-danger" id="sim-reset-btn"><i class="fa-solid fa-rotate-left"></i> Reset</button>
-                        </div>
-                    </div>
-
-                    <div class="sim-hud">
-                        <div>Active Phase: <strong id="sim-active-phase" class="text-success">NORTH GREEN</strong></div>
-                        <div>Phase Timer: <strong id="sim-timer">0s</strong></div>
-                        <div>Queued Vehicles: <strong id="sim-queue-count">0</strong></div>
-                    </div>
-
-                    <div class="canvas-wrapper">
-                        <canvas id="trafficCanvas" width="700" height="500"></canvas>
-                    </div>
-                </div>
-            </section>
-
-            <!-- VIEW: REPORTS -->
-            <section id="view-reports" class="content-view">
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <div><span class="metric-label">AVG WAITING TIME</span><h3 id="rep-wait">--</h3></div>
-                    </div>
-                    <div class="metric-card">
-                        <div><span class="metric-label">OPTIMIZATION IMPROVEMENT</span><h3 class="text-success" id="rep-impr">--</h3></div>
-                    </div>
-                    <div class="metric-card">
-                        <div><span class="metric-label">TRAFFIC DENSITY</span><h3 id="rep-density">--</h3></div>
-                    </div>
-                    <div class="metric-card">
-                        <div><span class="metric-label">ACTIVE AGENTS</span><h3 id="rep-agents">4</h3></div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- VIEW: SETTINGS -->
-            <section id="view-settings" class="content-view">
-                <div class="card">
-                    <h3>Optimization Constraints & Settings</h3>
-                    <form id="settings-form" class="settings-form-grid mt-4">
-                        <div class="form-group">
-                            <label>Minimum Green Time (seconds)</label>
-                            <input type="number" id="set-min-green" class="input-field" value="10" min="5" max="30">
-                        </div>
-                        <div class="form-group">
-                            <label>Maximum Green Time (seconds)</label>
-                            <input type="number" id="set-max-green" class="input-field" value="60" min="30" max="120">
-                        </div>
-                        <div class="form-group">
-                            <label>Yellow Clearance Time (seconds)</label>
-                            <input type="number" id="set-yellow" class="input-field" value="5" min="2" max="10">
-                        </div>
-                        <div class="form-group">
-                            <label>Total Cycle Time (seconds)</label>
-                            <input type="number" id="set-cycle" class="input-field" value="120" min="60" max="240">
-                        </div>
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save Constraints</button>
-                        </div>
-                    </form>
-                </div>
-            </section>
-        </main>
-    </div>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
-</body>
-</html>
