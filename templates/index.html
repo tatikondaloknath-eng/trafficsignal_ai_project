@@ -667,9 +667,10 @@
                                 Traffic Dataset
                             </h2>
 
-                            <button class="small-btn">
+                            <button id="uploadDatasetBtn" class="small-btn" type="button">
                                 Upload Dataset
                             </button>
+                            <input id="datasetFileInput" type="file" accept=".csv,.xlsx,.xls" hidden>
 
                         </div>
 
@@ -1113,29 +1114,48 @@
 
                 <div class="simulation-box">
 
-                    <div class="sim-light">
-
-                        <span class="red active"></span>
-                        <span class="yellow"></span>
-                        <span class="green"></span>
-
+                    <div class="simulation-topbar">
+                        <div>
+                            <strong id="simulationJunctionName">Junction 1</strong>
+                            <span>Live AI signal simulation</span>
+                        </div>
+                        <div class="simulation-metrics">
+                            <div><small>Cars Remaining</small><strong id="carsRemaining">0</strong></div>
+                            <div><small>Vehicles Cleared</small><strong id="carsCleared">0</strong></div>
+                            <div><small>Waiting</small><strong id="simulationWaiting">0 sec</strong></div>
+                        </div>
                     </div>
 
-                    <h2 id="simulationStatus">
-                        NORTH — RED
-                    </h2>
+                    <div class="simulation-scene">
+                        <div class="sim-road sim-road-v"></div>
+                        <div class="sim-road sim-road-h"></div>
+                        <div class="sim-center"></div>
+                        <div class="sim-lane-label sim-north">NORTH</div>
+                        <div class="sim-lane-label sim-south">SOUTH</div>
+                        <div class="sim-lane-label sim-east">EAST</div>
+                        <div class="sim-lane-label sim-west">WEST</div>
+                        <div id="simulationCars"></div>
+                        <div class="sim-light sim-light-north">
+                            <span class="red active"></span><span class="yellow"></span><span class="green"></span>
+                        </div>
+                        <div class="sim-light sim-light-south">
+                            <span class="red active"></span><span class="yellow"></span><span class="green"></span>
+                        </div>
+                        <div class="sim-light sim-light-east">
+                            <span class="red active"></span><span class="yellow"></span><span class="green"></span>
+                        </div>
+                        <div class="sim-light sim-light-west">
+                            <span class="red active"></span><span class="yellow"></span><span class="green"></span>
+                        </div>
+                    </div>
 
-                    <p>
-                        Signal simulation will use
-                        optimized timings.
-                    </p>
+                    <h2 id="simulationStatus">NORTH — RED</h2>
+                    <p id="simulationMessage">Run AI Optimization first, then start the simulation to watch vehicles move through the junction.</p>
 
-                    <button id="startSimulation"
-                            class="primary-btn">
-
-                        ▶ Start Simulation
-
-                    </button>
+                    <div class="simulation-actions">
+                        <button id="startSimulation" class="primary-btn">▶ Start Simulation</button>
+                        <button id="resetSimulation" class="secondary-btn" type="button">↻ Reset Cars</button>
+                    </div>
 
                 </div>
 
@@ -1164,9 +1184,7 @@
                             Average Waiting Time
                         </span>
 
-                        <strong>
-                            48.6 sec
-                        </strong>
+                        <strong id="reportWaiting">0 sec</strong>
                     </div>
 
                     <div class="report-card">
@@ -1174,9 +1192,7 @@
                             Optimization Improvement
                         </span>
 
-                        <strong>
-                            18.7%
-                        </strong>
+                        <strong id="reportImprovement">0%</strong>
                     </div>
 
                     <div class="report-card">
@@ -1184,9 +1200,7 @@
                             Traffic Density
                         </span>
 
-                        <strong>
-                            0.58
-                        </strong>
+                        <strong id="reportDensity">0</strong>
                     </div>
 
                     <div class="report-card">
@@ -1194,9 +1208,7 @@
                             Active Agents
                         </span>
 
-                        <strong>
-                            4
-                        </strong>
+                        <strong id="reportAgents">4</strong>
                     </div>
 
                 </div>
@@ -1224,8 +1236,9 @@
                     <label>
                         Minimum Green Time
 
-                        <input
+                        <input id="minGreen"
                             type="number"
+                            min="5" max="60"
                             value="10"
                         >
 
@@ -1235,8 +1248,9 @@
                     <label>
                         Maximum Green Time
 
-                        <input
+                        <input id="maxGreen"
                             type="number"
+                            min="10" max="90"
                             value="60"
                         >
 
@@ -1246,8 +1260,9 @@
                     <label>
                         Yellow Time
 
-                        <input
+                        <input id="yellowTime"
                             type="number"
+                            min="2" max="15"
                             value="5"
                         >
 
@@ -1257,14 +1272,17 @@
                     <label>
                         Cycle Time
 
-                        <input
+                        <input id="cycleTimeSetting"
                             type="number"
+                            min="40" max="240"
                             value="120"
                         >
 
                     </label>
 
                 </div>
+
+                <button id="saveSettings" class="primary-btn settings-save" type="button">✓ Save Optimization Settings</button>
 
             </div>
 
