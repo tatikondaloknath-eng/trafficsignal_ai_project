@@ -32,7 +32,7 @@
             </div>
         </aside>
 
-        <!-- Main Content Body -->
+        <!-- Main Content Area -->
         <main class="main-container">
             <header class="topbar">
                 <div>
@@ -322,7 +322,7 @@
                         </div>
                         <div class="sim-controls">
                             <button class="btn btn-success" id="sim-start-btn"><i class="fa-solid fa-play"></i> Start Simulation</button>
-                            <button class="btn btn-danger" id="sim-reset-btn"><i class="fa-solid fa-rotate-left"></i> Reset</button>
+                            <button class="btn btn-danger" id="sim-reset-btn"><i class="fa-solid fa-stop"></i> Reset / Stop</button>
                         </div>
                     </div>
 
@@ -342,10 +342,12 @@
                     </div>
 
                     <div class="sim-hud">
+                        <div>Status: <strong id="sim-status-tag" style="color: var(--accent-yellow);">PAUSED</strong></div>
+                        <div>Cycle: <strong id="sim-cycle-count">1</strong></div>
                         <div>Active Phase: <strong id="sim-active-phase" class="text-success">NORTH GREEN</strong></div>
                         <div>Phase Timer: <strong id="sim-timer">0s</strong></div>
                         <div>Queued Vehicles: <strong id="sim-queue-count">0</strong></div>
-                        <div>Simulated Speed: <strong id="sim-speed-val">49.9 km/h</strong></div>
+                        <div>Speed: <strong id="sim-speed-val">49.9 km/h</strong></div>
                     </div>
 
                     <div class="canvas-wrapper">
