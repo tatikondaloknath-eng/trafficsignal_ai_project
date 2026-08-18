@@ -22,7 +22,10 @@ document.addEventListener("DOMContentLoaded", () => {
             if (targetView === "intersections") loadIntersections();
             if (targetView === "reports") loadReports("all");
             if (targetView === "settings") loadSettings();
-            if (targetView === "simulation") loadSimJunctionConfig();
+            if (targetView === "simulation") {
+                const currentSimJ = document.getElementById("sim-junction-select")?.value || 1;
+                loadSimJunctionConfig(currentSimJ);
+            }
         });
     });
 
@@ -130,7 +133,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // 4. AI OPTIMIZATION & DASHBOARD LIVE INTERSECTION SYNC
+    // 4. AI OPTIMIZATION & DASHBOARD SYNC
     async function executeOptimization(junctionId = 1) {
         try {
             const res = await fetch(`/api/optimize?junction=${junctionId}`);
@@ -142,25 +145,21 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (optCycle) optCycle.innerText = `${result.cycle_time}s`;
                 if (optImpr) optImpr.innerText = `+${result.improvement}%`;
 
-                // Update Dashboard summary indicators
                 const dashOptCycle = document.getElementById("dash-opt-cycle");
                 const dashOptImpr = document.getElementById("dash-opt-impr");
                 if (dashOptCycle) dashOptCycle.innerText = `${result.cycle_time} sec`;
                 if (dashOptImpr) dashOptImpr.innerText = `+${result.improvement}%`;
 
-                // Update Crossroad directional units
                 if (document.getElementById("sig-N")) document.getElementById("sig-N").innerText = `${result.signals.North.green} sec`;
                 if (document.getElementById("sig-S")) document.getElementById("sig-S").innerText = `${result.signals.South.green} sec`;
                 if (document.getElementById("sig-E")) document.getElementById("sig-E").innerText = `${result.signals.East.green} sec`;
                 if (document.getElementById("sig-W")) document.getElementById("sig-W").innerText = `${result.signals.West.green} sec`;
 
-                // Update Dashboard Timings Table
                 if (document.getElementById("tbl-n-g")) document.getElementById("tbl-n-g").innerText = `${result.signals.North.green} sec`;
                 if (document.getElementById("tbl-s-g")) document.getElementById("tbl-s-g").innerText = `${result.signals.South.green} sec`;
                 if (document.getElementById("tbl-e-g")) document.getElementById("tbl-e-g").innerText = `${result.signals.East.green} sec`;
                 if (document.getElementById("tbl-w-g")) document.getElementById("tbl-w-g").innerText = `${result.signals.West.green} sec`;
 
-                // Update AI Optimization page table
                 const tbody = document.getElementById("opt-table-body");
                 if (tbody) {
                     tbody.innerHTML = Object.entries(result.signals).map(([dir, plan]) => `
@@ -175,7 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             return result;
         } catch (e) {
-            console.error("Optimization execution failed:", e);
+            console.error("Optimization failed:", e);
             return null;
         }
     }
@@ -195,7 +194,7 @@ document.addEventListener("DOMContentLoaded", () => {
         executeOptimization(jId);
     });
 
-    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE (CANVAS + CONTROLS)
+    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE (CANVAS + DYNAMIC HUD)
     const canvas = document.getElementById("trafficCanvas");
     const ctx = canvas ? canvas.getContext("2d") : null;
     let simAnimationId = null;
@@ -253,7 +252,7 @@ document.addEventListener("DOMContentLoaded", () => {
             );
 
             if ((nearStopLine && !canPass && !this.crossed) || ahead) {
-                // Halt vehicle
+                // Halt
             } else {
                 this.x += this.vx;
                 this.y += this.vy;
@@ -287,8 +286,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    async function loadSimJunctionConfig() {
-        const jId = document.getElementById("sim-junction-select")?.value || 1;
+    // Dynamic Junction Config Loader (Direct DOM & State update)
+    async function loadSimJunctionConfig(selectedId = 1) {
+        const jId = parseInt(selectedId);
         try {
             const [optRes, trafficRes] = await Promise.all([
                 fetch(`/api/optimize?junction=${jId}`),
@@ -297,17 +297,24 @@ document.addEventListener("DOMContentLoaded", () => {
             const optData = await optRes.json();
             const trafficData = await trafficRes.json();
 
-            const jTraffic = trafficData.find(j => j.id == jId) || trafficData[0];
-            simSpawnRate = Math.min(0.09, Math.max(0.03, (jTraffic.density / 100) * 0.1));
+            // Match accurately on numerical ID
+            const jTraffic = trafficData.find(j => parseInt(j.id) === jId) || trafficData[0];
             
-            if (document.getElementById("sim-junction-stats")) {
-                document.getElementById("sim-junction-stats").innerText = 
-                    `Junction ${jId}: Avg Vehicles: ${jTraffic.average_vehicles} | Density: ${jTraffic.density}% | Speed: ${jTraffic.average_speed} km/h`;
-            }
-            if (document.getElementById("sim-speed-val")) {
-                document.getElementById("sim-speed-val").innerText = `${jTraffic.average_speed} km/h`;
+            simSpawnRate = Math.min(0.09, Math.max(0.03, (jTraffic.density / 100) * 0.1));
+
+            // Update top blue info badge
+            const statsBox = document.getElementById("sim-junction-stats");
+            if (statsBox) {
+                statsBox.innerText = `Junction ${jId}: Avg Vehicles: ${jTraffic.average_vehicles} | Density: ${jTraffic.density}% | Speed: ${jTraffic.average_speed} km/h`;
             }
 
+            // Update speed metric
+            const speedBox = document.getElementById("sim-speed-val");
+            if (speedBox) {
+                speedBox.innerText = `${jTraffic.average_speed} km/h`;
+            }
+
+            // Recalculate phases for the selected junction
             if (optData.status === "success") {
                 const s = optData.signals;
                 phases = [
@@ -328,9 +335,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    document.getElementById("sim-junction-select")?.addEventListener("change", () => {
-        loadSimJunctionConfig();
+    const simJunctionSelect = document.getElementById("sim-junction-select");
+    simJunctionSelect?.addEventListener("change", (e) => {
         resetSimulation();
+        loadSimJunctionConfig(e.target.value);
     });
 
     function spawnTraffic() {
@@ -354,7 +362,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ctx.fillStyle = "#232f55";
         ctx.fillRect(310, 210, 80, 80);
 
-        // Lane divider dashed lines
+        // Center dashed markings
         ctx.setLineDash([8, 8]);
         ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
         ctx.lineWidth = 2;
@@ -366,7 +374,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // White Solid Stop Lines
+        // Stop Lines
         ctx.strokeStyle = "#ffffff";
         ctx.lineWidth = 3;
         ctx.beginPath();
@@ -398,7 +406,6 @@ document.addEventListener("DOMContentLoaded", () => {
             v.draw(ctx);
         });
 
-        // Cull vehicles leaving canvas
         vehiclesList = vehiclesList.filter(v => v.x >= -30 && v.x <= 730 && v.y >= -30 && v.y <= 530);
         
         const queuedCount = vehiclesList.filter(v => !v.crossed).length;
