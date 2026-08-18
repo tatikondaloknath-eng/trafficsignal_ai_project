@@ -137,19 +137,18 @@ document.addEventListener("DOMContentLoaded", () => {
             const result = await res.json();
 
             if (result.status === "success") {
-                // Update AI Optimization tab indicators
                 const optCycle = document.getElementById("opt-cycle-disp");
                 const optImpr = document.getElementById("opt-impr-disp");
                 if (optCycle) optCycle.innerText = `${result.cycle_time}s`;
                 if (optImpr) optImpr.innerText = `+${result.improvement}%`;
 
-                // Update Dashboard summary tags
+                // Update Dashboard Summary
                 const dashOptCycle = document.getElementById("dash-opt-cycle");
                 const dashOptImpr = document.getElementById("dash-opt-impr");
                 if (dashOptCycle) dashOptCycle.innerText = `${result.cycle_time} sec`;
                 if (dashOptImpr) dashOptImpr.innerText = `+${result.improvement}%`;
 
-                // Update Crossroad live direction timers
+                // Update Crossroad directional units
                 if (document.getElementById("sig-N")) document.getElementById("sig-N").innerText = `${result.signals.North.green} sec`;
                 if (document.getElementById("sig-S")) document.getElementById("sig-S").innerText = `${result.signals.South.green} sec`;
                 if (document.getElementById("sig-E")) document.getElementById("sig-E").innerText = `${result.signals.East.green} sec`;
@@ -181,7 +180,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Dashboard Junction Selector Event
     const dashJunctionSelect = document.getElementById("dash-junction-select");
     dashJunctionSelect?.addEventListener("change", (e) => {
         executeOptimization(e.target.value);
@@ -197,23 +195,24 @@ document.addEventListener("DOMContentLoaded", () => {
         executeOptimization(jId);
     });
 
-    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE
+    // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE (CANVAS + CONTROLS)
     const canvas = document.getElementById("trafficCanvas");
     const ctx = canvas ? canvas.getContext("2d") : null;
     let simAnimationId = null;
     let simRunning = false;
     let simTimerInterval = null;
+    let completedCycles = 1;
 
-    let simSpawnRate = 0.05;
+    let simSpawnRate = 0.06;
     let phases = [
-        { dir: "NORTH", duration: 8, color: "#06d6a0" },
-        { dir: "NORTH_Y", duration: 2, color: "#ffd166" },
-        { dir: "SOUTH", duration: 6, color: "#06d6a0" },
-        { dir: "SOUTH_Y", duration: 2, color: "#ffd166" },
-        { dir: "EAST", duration: 4, color: "#06d6a0" },
-        { dir: "EAST_Y", duration: 2, color: "#ffd166" },
-        { dir: "WEST", duration: 3, color: "#06d6a0" },
-        { dir: "WEST_Y", duration: 2, color: "#ffd166" }
+        { dir: "NORTH", duration: 8, color: "#06d6a0", text: "NORTH GREEN" },
+        { dir: "NORTH_Y", duration: 2, color: "#ffd166", text: "NORTH YELLOW" },
+        { dir: "SOUTH", duration: 6, color: "#06d6a0", text: "SOUTH GREEN" },
+        { dir: "SOUTH_Y", duration: 2, color: "#ffd166", text: "SOUTH YELLOW" },
+        { dir: "EAST", duration: 5, color: "#06d6a0", text: "EAST GREEN" },
+        { dir: "EAST_Y", duration: 2, color: "#ffd166", text: "EAST YELLOW" },
+        { dir: "WEST", duration: 4, color: "#06d6a0", text: "WEST GREEN" },
+        { dir: "WEST_Y", duration: 2, color: "#ffd166", text: "WEST YELLOW" }
     ];
 
     let currentPhaseIndex = 0;
@@ -223,41 +222,69 @@ document.addEventListener("DOMContentLoaded", () => {
     class Vehicle {
         constructor(direction) {
             this.direction = direction;
-            this.speed = 2.0;
-            this.length = 18;
-            this.width = 10;
+            this.speed = 2.2;
+            this.length = 20;
+            this.width = 12;
             this.crossed = false;
 
-            if (direction === "NORTH") { this.x = 335; this.y = 0; this.vx = 0; this.vy = this.speed; }
-            if (direction === "SOUTH") { this.x = 355; this.y = 500; this.vx = 0; this.vy = -this.speed; }
-            if (direction === "EAST")  { this.x = 0; this.y = 265; this.vx = this.speed; this.vy = 0; }
-            if (direction === "WEST")  { this.x = 700; this.y = 235; this.vx = -this.speed; this.vy = 0; }
+            if (direction === "NORTH") { this.x = 335; this.y = 0; this.vx = 0; this.vy = this.speed; this.color = "#48cae4"; }
+            if (direction === "SOUTH") { this.x = 355; this.y = 500; this.vx = 0; this.vy = -this.speed; this.color = "#06d6a0"; }
+            if (direction === "EAST")  { this.x = 0; this.y = 265; this.vx = this.speed; this.vy = 0; this.color = "#ffd166"; }
+            if (direction === "WEST")  { this.x = 700; this.y = 235; this.vx = -this.speed; this.vy = 0; this.color = "#f72585"; }
         }
 
         update(activeDirection) {
             const canPass = activeDirection.startsWith(this.direction);
             
+            // Avoid car overlapping
+            const ahead = vehiclesList.find(other => {
+                if (other === this || other.direction !== this.direction) return false;
+                if (this.direction === "NORTH") return other.y > this.y && (other.y - this.y) < 28;
+                if (this.direction === "SOUTH") return other.y < this.y && (this.y - other.y) < 28;
+                if (this.direction === "EAST")  return other.x > this.x && (other.x - this.x) < 28;
+                if (this.direction === "WEST")  return other.x < this.x && (this.x - other.x) < 28;
+                return false;
+            });
+
             const nearStopLine = (
-                (this.direction === "NORTH" && this.y >= 200 && this.y <= 215) ||
-                (this.direction === "SOUTH" && this.y <= 295 && this.y >= 280) ||
-                (this.direction === "EAST" && this.x >= 300 && this.x <= 315) ||
-                (this.direction === "WEST" && this.x <= 395 && this.x >= 380)
+                (this.direction === "NORTH" && this.y >= 195 && this.y <= 212) ||
+                (this.direction === "SOUTH" && this.y <= 295 && this.y >= 278) ||
+                (this.direction === "EAST"  && this.x >= 295 && this.x <= 312) ||
+                (this.direction === "WEST"  && this.x <= 395 && this.x >= 378)
             );
 
-            if (nearStopLine && !canPass && !this.crossed) {
-                // Wait at stop line
+            if ((nearStopLine && !canPass && !this.crossed) || ahead) {
+                // Halt at stopline or queue
             } else {
                 this.x += this.vx;
                 this.y += this.vy;
-                if (this.x > 320 && this.x < 380 && this.y > 210 && this.y < 290) {
+                if (this.x > 315 && this.x < 385 && this.y > 215 && this.y < 285) {
                     this.crossed = true;
                 }
             }
         }
 
         draw(ctx) {
-            ctx.fillStyle = this.crossed ? "#48cae4" : "#ef476f";
-            ctx.fillRect(this.x - this.width/2, this.y - this.length/2, this.width, this.length);
+            ctx.fillStyle = this.crossed ? "#70e000" : this.color;
+            ctx.beginPath();
+            ctx.roundRect(this.x - this.width/2, this.y - this.length/2, this.width, this.length, [3]);
+            ctx.fill();
+
+            // Headlights
+            ctx.fillStyle = "#ffffff";
+            if (this.direction === "NORTH") {
+                ctx.fillRect(this.x - 5, this.y + 7, 2, 2);
+                ctx.fillRect(this.x + 3, this.y + 7, 2, 2);
+            } else if (this.direction === "SOUTH") {
+                ctx.fillRect(this.x - 5, this.y - 9, 2, 2);
+                ctx.fillRect(this.x + 3, this.y - 9, 2, 2);
+            } else if (this.direction === "EAST") {
+                ctx.fillRect(this.x + 7, this.y - 5, 2, 2);
+                ctx.fillRect(this.x + 7, this.y + 3, 2, 2);
+            } else if (this.direction === "WEST") {
+                ctx.fillRect(this.x - 9, this.y - 5, 2, 2);
+                ctx.fillRect(this.x - 9, this.y + 3, 2, 2);
+            }
         }
     }
 
@@ -285,14 +312,14 @@ document.addEventListener("DOMContentLoaded", () => {
             if (optData.status === "success") {
                 const s = optData.signals;
                 phases = [
-                    { dir: "NORTH", duration: Math.max(3, Math.round(s.North.green / 5)), color: "#06d6a0" },
-                    { dir: "NORTH_Y", duration: 2, color: "#ffd166" },
-                    { dir: "SOUTH", duration: Math.max(3, Math.round(s.South.green / 5)), color: "#06d6a0" },
-                    { dir: "SOUTH_Y", duration: 2, color: "#ffd166" },
-                    { dir: "EAST", duration: Math.max(3, Math.round(s.East.green / 5)), color: "#06d6a0" },
-                    { dir: "EAST_Y", duration: 2, color: "#ffd166" },
-                    { dir: "WEST", duration: Math.max(3, Math.round(s.West.green / 5)), color: "#06d6a0" },
-                    { dir: "WEST_Y", duration: 2, color: "#ffd166" }
+                    { dir: "NORTH", duration: Math.max(3, Math.round(s.North.green / 5)), color: "#06d6a0", text: "NORTH GREEN" },
+                    { dir: "NORTH_Y", duration: 2, color: "#ffd166", text: "NORTH YELLOW" },
+                    { dir: "SOUTH", duration: Math.max(3, Math.round(s.South.green / 5)), color: "#06d6a0", text: "SOUTH GREEN" },
+                    { dir: "SOUTH_Y", duration: 2, color: "#ffd166", text: "SOUTH YELLOW" },
+                    { dir: "EAST", duration: Math.max(3, Math.round(s.East.green / 5)), color: "#06d6a0", text: "EAST GREEN" },
+                    { dir: "EAST_Y", duration: 2, color: "#ffd166", text: "EAST YELLOW" },
+                    { dir: "WEST", duration: Math.max(3, Math.round(s.West.green / 5)), color: "#06d6a0", text: "WEST GREEN" },
+                    { dir: "WEST_Y", duration: 2, color: "#ffd166", text: "WEST YELLOW" }
                 ];
                 currentPhaseIndex = 0;
                 phaseTimeRemaining = phases[0].duration;
@@ -319,13 +346,28 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!ctx) return;
         ctx.clearRect(0, 0, 700, 500);
 
+        // Asphalt roads
         ctx.fillStyle = "#1c2541";
         ctx.fillRect(310, 0, 80, 500);
         ctx.fillRect(0, 210, 700, 80);
 
+        // Center box
         ctx.fillStyle = "#232f55";
         ctx.fillRect(310, 210, 80, 80);
 
+        // Lane divider dashed lines
+        ctx.setLineDash([8, 8]);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(350, 0); ctx.lineTo(350, 210);
+        ctx.moveTo(350, 290); ctx.lineTo(350, 500);
+        ctx.moveTo(0, 250); ctx.lineTo(310, 250);
+        ctx.moveTo(390, 250); ctx.lineTo(700, 250);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // White Solid Stop Lines
         ctx.strokeStyle = "#ffffff";
         ctx.lineWidth = 3;
         ctx.beginPath();
@@ -335,11 +377,15 @@ document.addEventListener("DOMContentLoaded", () => {
         ctx.moveTo(390, 210); ctx.lineTo(390, 290);
         ctx.stroke();
 
+        // Traffic Light Indicator
         const currentP = phases[currentPhaseIndex];
         ctx.fillStyle = currentP.color;
+        ctx.shadowColor = currentP.color;
+        ctx.shadowBlur = 12;
         ctx.beginPath();
-        ctx.arc(350, 250, 10, 0, Math.PI * 2);
+        ctx.arc(350, 250, 11, 0, Math.PI * 2);
         ctx.fill();
+        ctx.shadowBlur = 0;
     }
 
     function simLoop() {
@@ -353,10 +399,13 @@ document.addEventListener("DOMContentLoaded", () => {
             v.draw(ctx);
         });
 
-        vehiclesList = vehiclesList.filter(v => v.x >= 0 && v.x <= 700 && v.y >= 0 && v.y <= 500);
+        // Cull vehicles leaving canvas
+        vehiclesList = vehiclesList.filter(v => v.x >= -30 && v.x <= 730 && v.y >= -30 && v.y <= 530);
         
         const queuedCount = vehiclesList.filter(v => !v.crossed).length;
-        document.getElementById("sim-queue-count").innerText = queuedCount;
+        if (document.getElementById("sim-queue-count")) {
+            document.getElementById("sim-queue-count").innerText = queuedCount;
+        }
 
         simAnimationId = requestAnimationFrame(simLoop);
     }
@@ -367,28 +416,74 @@ document.addEventListener("DOMContentLoaded", () => {
         cancelAnimationFrame(simAnimationId);
         vehiclesList = [];
         currentPhaseIndex = 0;
+        completedCycles = 1;
         phaseTimeRemaining = phases[0].duration;
         drawIntersection();
-        document.getElementById("sim-queue-count").innerText = "0";
-        document.getElementById("sim-timer").innerText = "0s";
+
+        const startBtn = document.getElementById("sim-start-btn");
+        if (startBtn) {
+            startBtn.innerHTML = `<i class="fa-solid fa-play"></i> Start Simulation`;
+            startBtn.className = "btn btn-success";
+        }
+        if (document.getElementById("sim-status-tag")) {
+            document.getElementById("sim-status-tag").innerText = "STOPPED";
+            document.getElementById("sim-status-tag").style.color = "var(--accent-red)";
+        }
+        if (document.getElementById("sim-cycle-count")) document.getElementById("sim-cycle-count").innerText = "1";
+        if (document.getElementById("sim-queue-count")) document.getElementById("sim-queue-count").innerText = "0";
+        if (document.getElementById("sim-timer")) document.getElementById("sim-timer").innerText = "0s";
     }
 
-    document.getElementById("sim-start-btn")?.addEventListener("click", () => {
-        if (simRunning) return;
-        simRunning = true;
-        simLoop();
+    const startBtn = document.getElementById("sim-start-btn");
+    startBtn?.addEventListener("click", () => {
+        if (!simRunning) {
+            // Start or Resume
+            simRunning = true;
+            startBtn.innerHTML = `<i class="fa-solid fa-pause"></i> Pause Simulation`;
+            startBtn.className = "btn btn-secondary";
 
-        simTimerInterval = setInterval(() => {
-            phaseTimeRemaining--;
-            if (phaseTimeRemaining <= 0) {
-                currentPhaseIndex = (currentPhaseIndex + 1) % phases.length;
-                phaseTimeRemaining = phases[currentPhaseIndex].duration;
-                const p = phases[currentPhaseIndex];
-                document.getElementById("sim-active-phase").innerText = `${p.dir.replace('_', ' ')}`;
-                document.getElementById("sim-active-phase").style.color = p.color;
+            if (document.getElementById("sim-status-tag")) {
+                document.getElementById("sim-status-tag").innerText = "RUNNING";
+                document.getElementById("sim-status-tag").style.color = "var(--accent-green)";
             }
-            document.getElementById("sim-timer").innerText = `${phaseTimeRemaining}s`;
-        }, 1000);
+
+            simLoop();
+
+            simTimerInterval = setInterval(() => {
+                phaseTimeRemaining--;
+                if (phaseTimeRemaining <= 0) {
+                    currentPhaseIndex = (currentPhaseIndex + 1) % phases.length;
+                    if (currentPhaseIndex === 0) {
+                        completedCycles++;
+                        if (document.getElementById("sim-cycle-count")) {
+                            document.getElementById("sim-cycle-count").innerText = completedCycles;
+                        }
+                    }
+                    phaseTimeRemaining = phases[currentPhaseIndex].duration;
+                    const p = phases[currentPhaseIndex];
+                    if (document.getElementById("sim-active-phase")) {
+                        document.getElementById("sim-active-phase").innerText = p.text;
+                        document.getElementById("sim-active-phase").style.color = p.color;
+                    }
+                }
+                if (document.getElementById("sim-timer")) {
+                    document.getElementById("sim-timer").innerText = `${phaseTimeRemaining}s`;
+                }
+            }, 1000);
+        } else {
+            // Pause
+            simRunning = false;
+            clearInterval(simTimerInterval);
+            cancelAnimationFrame(simAnimationId);
+
+            startBtn.innerHTML = `<i class="fa-solid fa-play"></i> Resume Simulation`;
+            startBtn.className = "btn btn-success";
+
+            if (document.getElementById("sim-status-tag")) {
+                document.getElementById("sim-status-tag").innerText = "PAUSED";
+                document.getElementById("sim-status-tag").style.color = "var(--accent-yellow)";
+            }
+        }
     });
 
     document.getElementById("sim-reset-btn")?.addEventListener("click", resetSimulation);
