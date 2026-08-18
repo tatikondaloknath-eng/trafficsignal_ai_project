@@ -130,13 +130,14 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // 4. DYNAMIC OPTIMIZATION & DASHBOARD LIVE INTERSECTION SYNC
-    async function executeOptimization(junctionId = 1, timeOfDay = "all") {
+    // 4. AI OPTIMIZATION & DASHBOARD LIVE INTERSECTION SYNC
+    async function executeOptimization(junctionId = 1) {
         try {
-            const res = await fetch(`/api/optimize?junction=${junctionId}&time_of_day=${timeOfDay}`);
+            const res = await fetch(`/api/optimize?junction=${junctionId}`);
             const result = await res.json();
 
             if (result.status === "success") {
+                // Update AI Optimization tab indicators
                 const optCycle = document.getElementById("opt-cycle-disp");
                 const optImpr = document.getElementById("opt-impr-disp");
                 if (optCycle) optCycle.innerText = `${result.cycle_time}s`;
@@ -180,25 +181,20 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Dashboard Dropdown Listeners
+    // Dashboard Junction Selector Event
     const dashJunctionSelect = document.getElementById("dash-junction-select");
-    const dashTimeSelect = document.getElementById("dash-time-select");
+    dashJunctionSelect?.addEventListener("change", (e) => {
+        executeOptimization(e.target.value);
+    });
 
-    function triggerDashboardOpt() {
+    document.getElementById("dash-opt-btn")?.addEventListener("click", () => {
         const jId = dashJunctionSelect ? dashJunctionSelect.value : 1;
-        const tod = dashTimeSelect ? dashTimeSelect.value : "all";
-        executeOptimization(jId, tod);
-    }
+        executeOptimization(jId);
+    });
 
-    dashJunctionSelect?.addEventListener("change", triggerDashboardOpt);
-    dashTimeSelect?.addEventListener("change", triggerDashboardOpt);
-    document.getElementById("dash-opt-btn")?.addEventListener("click", triggerDashboardOpt);
-
-    // AI Optimization View Listeners
     document.getElementById("run-opt-btn")?.addEventListener("click", () => {
         const jId = document.getElementById("opt-junction-select")?.value || 1;
-        const tod = document.getElementById("opt-time-select")?.value || "all";
-        executeOptimization(jId, tod);
+        executeOptimization(jId);
     });
 
     // 5. MICROSCOPIC TRAFFIC SIMULATION ENGINE
@@ -249,7 +245,7 @@ document.addEventListener("DOMContentLoaded", () => {
             );
 
             if (nearStopLine && !canPass && !this.crossed) {
-                // Halt at stop line
+                // Wait at stop line
             } else {
                 this.x += this.vx;
                 this.y += this.vy;
@@ -267,10 +263,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadSimJunctionConfig() {
         const jId = document.getElementById("sim-junction-select")?.value || 1;
-        const tod = document.getElementById("sim-time-select")?.value || "all";
         try {
             const [optRes, trafficRes] = await Promise.all([
-                fetch(`/api/optimize?junction=${jId}&time_of_day=${tod}`),
+                fetch(`/api/optimize?junction=${jId}`),
                 fetch("/api/traffic")
             ]);
             const optData = await optRes.json();
@@ -281,7 +276,7 @@ document.addEventListener("DOMContentLoaded", () => {
             
             if (document.getElementById("sim-junction-stats")) {
                 document.getElementById("sim-junction-stats").innerText = 
-                    `Junction ${jId} (${tod}): Avg Vehicles: ${jTraffic.average_vehicles} | Density: ${jTraffic.density}% | Speed: ${jTraffic.average_speed} km/h`;
+                    `Junction ${jId}: Avg Vehicles: ${jTraffic.average_vehicles} | Density: ${jTraffic.density}% | Speed: ${jTraffic.average_speed} km/h`;
             }
             if (document.getElementById("sim-speed-val")) {
                 document.getElementById("sim-speed-val").innerText = `${jTraffic.average_speed} km/h`;
@@ -308,10 +303,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     document.getElementById("sim-junction-select")?.addEventListener("change", () => {
-        loadSimJunctionConfig();
-        resetSimulation();
-    });
-    document.getElementById("sim-time-select")?.addEventListener("change", () => {
         loadSimJunctionConfig();
         resetSimulation();
     });
@@ -441,16 +432,16 @@ document.addEventListener("DOMContentLoaded", () => {
             body: JSON.stringify(payload)
         });
         alert("Constraints saved successfully!");
-        triggerDashboardOpt();
+        executeOptimization(dashJunctionSelect ? dashJunctionSelect.value : 1);
     });
 
     document.getElementById("refresh-global-btn")?.addEventListener("click", () => {
         loadDashboardStats();
-        triggerDashboardOpt();
+        executeOptimization(dashJunctionSelect ? dashJunctionSelect.value : 1);
     });
 
     // Initial Dashboard Load
     loadDashboardStats();
-    triggerDashboardOpt();
+    executeOptimization(1);
     drawIntersection();
 });
