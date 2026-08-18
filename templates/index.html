@@ -86,21 +86,12 @@
                     <div class="card road-card">
                         <div class="card-header-flex">
                             <h3><i class="fa-solid fa-traffic-light"></i> LIVE INTERSECTION</h3>
-                            <div style="display: flex; gap: 8px;">
-                                <select id="dash-junction-select" class="select-input" style="padding: 4px 10px; font-size: 0.85rem;">
-                                    <option value="1" selected>Junction 1</option>
-                                    <option value="2">Junction 2</option>
-                                    <option value="3">Junction 3</option>
-                                    <option value="4">Junction 4</option>
-                                </select>
-                                <select id="dash-time-select" class="select-input" style="padding: 4px 10px; font-size: 0.85rem;">
-                                    <option value="all" selected>All Times</option>
-                                    <option value="morning">Morning</option>
-                                    <option value="afternoon">Afternoon</option>
-                                    <option value="evening">Evening</option>
-                                    <option value="night">Night</option>
-                                </select>
-                            </div>
+                            <select id="dash-junction-select" class="select-input" style="padding: 4px 12px; font-size: 0.85rem;">
+                                <option value="1" selected>Junction 1</option>
+                                <option value="2">Junction 2</option>
+                                <option value="3">Junction 3</option>
+                                <option value="4">Junction 4</option>
+                            </select>
                         </div>
 
                         <div class="intersection-map">
@@ -286,13 +277,6 @@
                             <option value="3">Junction 3 (Agent 3)</option>
                             <option value="4">Junction 4 (Agent 4)</option>
                         </select>
-                        <select id="opt-time-select" class="select-input">
-                            <option value="all">All Times</option>
-                            <option value="morning">Morning</option>
-                            <option value="afternoon">Afternoon</option>
-                            <option value="evening">Evening</option>
-                            <option value="night">Night</option>
-                        </select>
                         <button class="btn btn-primary" id="run-opt-btn"><i class="fa-solid fa-brain"></i> Run AI Optimization</button>
                     </div>
 
@@ -344,20 +328,12 @@
 
                     <div class="dataset-controls mt-4">
                         <div style="display: flex; gap: 12px; align-items: center;">
-                            <label for="sim-junction-select"><strong>Junction:</strong></label>
+                            <label for="sim-junction-select"><strong>Select Junction:</strong></label>
                             <select id="sim-junction-select" class="select-input">
                                 <option value="1">Junction 1</option>
                                 <option value="2">Junction 2</option>
                                 <option value="3">Junction 3</option>
                                 <option value="4">Junction 4</option>
-                            </select>
-                            <label for="sim-time-select"><strong>Time:</strong></label>
-                            <select id="sim-time-select" class="select-input">
-                                <option value="all">All Times</option>
-                                <option value="morning">Morning</option>
-                                <option value="afternoon">Afternoon</option>
-                                <option value="evening">Evening</option>
-                                <option value="night">Night</option>
                             </select>
                         </div>
                         <div id="sim-junction-stats" class="badge-accent">
