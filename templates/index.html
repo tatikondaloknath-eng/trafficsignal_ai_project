@@ -82,7 +82,6 @@
 
                 <!-- LIVE INTERSECTION ROAD GRAPHIC & AI TIMINGS -->
                 <div class="dashboard-intersection-row">
-                    <!-- Road Crossroad Graphic -->
                     <div class="card road-card">
                         <div class="card-header-flex">
                             <h3><i class="fa-solid fa-traffic-light"></i> LIVE INTERSECTION</h3>
@@ -104,7 +103,6 @@
                                 <span class="arrow arrow-right"><i class="fa-solid fa-arrow-right"></i></span>
                             </div>
 
-                            <!-- North Unit -->
                             <div class="traffic-unit unit-north">
                                 <div class="unit-label">NORTH</div>
                                 <div class="unit-time" id="sig-N">32 sec</div>
@@ -114,7 +112,6 @@
                                 </div>
                             </div>
 
-                            <!-- South Unit -->
                             <div class="traffic-unit unit-south">
                                 <div class="mini-signal">
                                     <span class="light red active"></span>
@@ -124,7 +121,6 @@
                                 <div class="unit-time" id="sig-S">25 sec</div>
                             </div>
 
-                            <!-- East Unit -->
                             <div class="traffic-unit unit-east">
                                 <div class="unit-label">EAST</div>
                                 <div class="unit-time" id="sig-E">24 sec</div>
@@ -134,7 +130,6 @@
                                 </div>
                             </div>
 
-                            <!-- West Unit -->
                             <div class="traffic-unit unit-west">
                                 <div class="unit-label">WEST</div>
                                 <div class="unit-time" id="sig-W">19 sec</div>
@@ -146,7 +141,6 @@
                         </div>
                     </div>
 
-                    <!-- AI Optimized Signal Timings Table -->
                     <div class="card timings-card">
                         <div class="card-header-flex">
                             <h3><i class="fa-solid fa-brain"></i> AI OPTIMIZED SIGNAL TIMINGS</h3>
@@ -318,7 +312,7 @@
                     <div class="simulation-header">
                         <div>
                             <h3>Real-Time Microscopic Traffic Simulation</h3>
-                            <p>Demonstrates queue clearance dynamics under AI-optimized timing allocations.</p>
+                            <p>Demonstrates continuous queue clearance dynamics under AI-optimized timing allocations.</p>
                         </div>
                         <div class="sim-controls">
                             <button class="btn btn-success" id="sim-start-btn"><i class="fa-solid fa-play"></i> Start Simulation</button>
@@ -358,18 +352,65 @@
 
             <!-- VIEW 6: REPORTS -->
             <section id="view-reports" class="content-view">
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <div><span class="metric-label">AVG WAITING TIME</span><h3 id="rep-wait">--</h3></div>
+                <div class="card">
+                    <div class="dataset-controls">
+                        <div>
+                            <label for="reports-junction-select"><strong>Select Junction / Network:</strong></label>
+                            <select id="reports-junction-select" class="select-input">
+                                <option value="all" selected>All Junctions (Network Overview)</option>
+                                <option value="1">Junction 1 (Agent 1)</option>
+                                <option value="2">Junction 2 (Agent 2)</option>
+                                <option value="3">Junction 3 (Agent 3)</option>
+                                <option value="4">Junction 4 (Agent 4)</option>
+                            </select>
+                        </div>
+                        <div class="badge-accent" id="reports-header-badge">
+                            Network View: 4 Active Agents
+                        </div>
                     </div>
-                    <div class="metric-card">
-                        <div><span class="metric-label">OPTIMIZATION IMPROVEMENT</span><h3 class="text-success" id="rep-impr">--</h3></div>
+
+                    <div class="metrics-grid mt-4">
+                        <div class="metric-card">
+                            <div class="metric-icon"><i class="fa-solid fa-clock"></i></div>
+                            <div>
+                                <span class="metric-label">AVG WAITING TIME</span>
+                                <h3 id="rep-wait">--</h3>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon"><i class="fa-solid fa-chart-line"></i></div>
+                            <div>
+                                <span class="metric-label">OPTIMIZATION IMPROVEMENT</span>
+                                <h3 class="text-success" id="rep-impr">--</h3>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon"><i class="fa-solid fa-water"></i></div>
+                            <div>
+                                <span class="metric-label">TRAFFIC DENSITY</span>
+                                <h3 id="rep-density">--</h3>
+                            </div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-icon"><i class="fa-solid fa-robot"></i></div>
+                            <div>
+                                <span class="metric-label">ACTIVE AGENTS</span>
+                                <h3 id="rep-agents">4</h3>
+                            </div>
+                        </div>
                     </div>
-                    <div class="metric-card">
-                        <div><span class="metric-label">TRAFFIC DENSITY</span><h3 id="rep-density">--</h3></div>
-                    </div>
-                    <div class="metric-card">
-                        <div><span class="metric-label">ACTIVE AGENTS</span><h3 id="rep-agents">4</h3></div>
+
+                    <div class="dashboard-split mt-4">
+                        <div class="card" style="margin-bottom: 0;">
+                            <h4><i class="fa-solid fa-gauge-high"></i> Performance Summary</h4>
+                            <p class="mt-4">Average Traffic Speed: <strong id="rep-speed" class="text-success">49.85 km/h</strong></p>
+                            <p style="margin-top: 8px;">Total Processed Vehicles: <strong id="rep-total-veh">797,661</strong></p>
+                        </div>
+                        <div class="card" style="margin-bottom: 0;">
+                            <h4><i class="fa-solid fa-shield-halved"></i> AI Controller Status</h4>
+                            <p class="mt-4">Multi-Agent State: <strong class="text-success">SYNCHRONIZED</strong></p>
+                            <p style="margin-top: 8px;">Constraint Violations: <strong class="text-success">0 (100% Compliant)</strong></p>
+                        </div>
                     </div>
                 </div>
             </section>
