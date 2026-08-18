@@ -80,18 +80,27 @@
                 <div class="section-title"><h3>Intersections Overview</h3></div>
                 <div class="junction-grid" id="dash-junctions-container"></div>
 
-                <!-- LIVE INTERSECTION ROAD GRAPHIC & AI SIGNAL TIMINGS -->
+                <!-- LIVE INTERSECTION ROAD GRAPHIC & AI TIMINGS -->
                 <div class="dashboard-intersection-row">
-                    <!-- Road Crossroad Graphic with Interactive Dropdown -->
+                    <!-- Road Crossroad Graphic -->
                     <div class="card road-card">
                         <div class="card-header-flex">
                             <h3><i class="fa-solid fa-traffic-light"></i> LIVE INTERSECTION</h3>
-                            <select id="dash-junction-select" class="select-input" style="padding: 4px 12px; font-size: 0.85rem;">
-                                <option value="1" selected>Junction 1</option>
-                                <option value="2">Junction 2</option>
-                                <option value="3">Junction 3</option>
-                                <option value="4">Junction 4</option>
-                            </select>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="dash-junction-select" class="select-input" style="padding: 4px 10px; font-size: 0.85rem;">
+                                    <option value="1" selected>Junction 1</option>
+                                    <option value="2">Junction 2</option>
+                                    <option value="3">Junction 3</option>
+                                    <option value="4">Junction 4</option>
+                                </select>
+                                <select id="dash-time-select" class="select-input" style="padding: 4px 10px; font-size: 0.85rem;">
+                                    <option value="all" selected>All Times</option>
+                                    <option value="morning">Morning</option>
+                                    <option value="afternoon">Afternoon</option>
+                                    <option value="evening">Evening</option>
+                                    <option value="night">Night</option>
+                                </select>
+                            </div>
                         </div>
 
                         <div class="intersection-map">
@@ -107,7 +116,7 @@
                             <!-- North Unit -->
                             <div class="traffic-unit unit-north">
                                 <div class="unit-label">NORTH</div>
-                                <div class="unit-time" id="sig-N">40 sec</div>
+                                <div class="unit-time" id="sig-N">32 sec</div>
                                 <div class="mini-signal">
                                     <span class="light red"></span>
                                     <span class="light green active"></span>
@@ -121,13 +130,13 @@
                                     <span class="light green"></span>
                                 </div>
                                 <div class="unit-label">SOUTH</div>
-                                <div class="unit-time" id="sig-S">30 sec</div>
+                                <div class="unit-time" id="sig-S">25 sec</div>
                             </div>
 
                             <!-- East Unit -->
                             <div class="traffic-unit unit-east">
                                 <div class="unit-label">EAST</div>
-                                <div class="unit-time" id="sig-E">20 sec</div>
+                                <div class="unit-time" id="sig-E">24 sec</div>
                                 <div class="mini-signal">
                                     <span class="light red"></span>
                                     <span class="light green active"></span>
@@ -137,7 +146,7 @@
                             <!-- West Unit -->
                             <div class="traffic-unit unit-west">
                                 <div class="unit-label">WEST</div>
-                                <div class="unit-time" id="sig-W">15 sec</div>
+                                <div class="unit-time" id="sig-W">19 sec</div>
                                 <div class="mini-signal">
                                     <span class="light red active"></span>
                                     <span class="light green"></span>
@@ -146,7 +155,7 @@
                         </div>
                     </div>
 
-                    <!-- AI Optimized Signal Timings Table & Result -->
+                    <!-- AI Optimized Signal Timings Table -->
                     <div class="card timings-card">
                         <div class="card-header-flex">
                             <h3><i class="fa-solid fa-brain"></i> AI OPTIMIZED SIGNAL TIMINGS</h3>
@@ -166,27 +175,27 @@
                                 <tbody>
                                     <tr>
                                         <td>North</td>
-                                        <td class="text-success"><b id="tbl-n-g">40 sec</b></td>
+                                        <td class="text-success"><b id="tbl-n-g">32 sec</b></td>
                                         <td>5 sec</td>
-                                        <td>55 sec</td>
+                                        <td>63 sec</td>
                                     </tr>
                                     <tr>
                                         <td>South</td>
-                                        <td class="text-success"><b id="tbl-s-g">30 sec</b></td>
+                                        <td class="text-success"><b id="tbl-s-g">25 sec</b></td>
                                         <td>5 sec</td>
-                                        <td>65 sec</td>
+                                        <td>70 sec</td>
                                     </tr>
                                     <tr>
                                         <td>East</td>
-                                        <td class="text-success"><b id="tbl-e-g">20 sec</b></td>
+                                        <td class="text-success"><b id="tbl-e-g">24 sec</b></td>
                                         <td>5 sec</td>
-                                        <td>75 sec</td>
+                                        <td>71 sec</td>
                                     </tr>
                                     <tr>
                                         <td>West</td>
-                                        <td class="text-success"><b id="tbl-w-g">15 sec</b></td>
+                                        <td class="text-success"><b id="tbl-w-g">19 sec</b></td>
                                         <td>5 sec</td>
-                                        <td>80 sec</td>
+                                        <td>76 sec</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -270,12 +279,19 @@
                 <div class="card">
                     <h3>AI Traffic Optimization Engine</h3>
                     <p class="mb-4">Calculates heuristic A* state-space signal allocations bounded by constraint satisfaction per intersection agent.</p>
-                    <div class="controls-row mb-4">
+                    <div class="controls-row mb-4" style="display: flex; gap: 12px; align-items: center;">
                         <select id="opt-junction-select" class="select-input">
                             <option value="1">Junction 1 (Agent 1)</option>
                             <option value="2">Junction 2 (Agent 2)</option>
                             <option value="3">Junction 3 (Agent 3)</option>
                             <option value="4">Junction 4 (Agent 4)</option>
+                        </select>
+                        <select id="opt-time-select" class="select-input">
+                            <option value="all">All Times</option>
+                            <option value="morning">Morning</option>
+                            <option value="afternoon">Afternoon</option>
+                            <option value="evening">Evening</option>
+                            <option value="night">Night</option>
                         </select>
                         <button class="btn btn-primary" id="run-opt-btn"><i class="fa-solid fa-brain"></i> Run AI Optimization</button>
                     </div>
@@ -327,13 +343,21 @@
                     </div>
 
                     <div class="dataset-controls mt-4">
-                        <div>
-                            <label for="sim-junction-select"><strong>Select Junction to Simulate:</strong></label>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <label for="sim-junction-select"><strong>Junction:</strong></label>
                             <select id="sim-junction-select" class="select-input">
-                                <option value="1">Junction 1 (Agent 1 Data)</option>
-                                <option value="2">Junction 2 (Agent 2 Data)</option>
-                                <option value="3">Junction 3 (Agent 3 Data)</option>
-                                <option value="4">Junction 4 (Agent 4 Data)</option>
+                                <option value="1">Junction 1</option>
+                                <option value="2">Junction 2</option>
+                                <option value="3">Junction 3</option>
+                                <option value="4">Junction 4</option>
+                            </select>
+                            <label for="sim-time-select"><strong>Time:</strong></label>
+                            <select id="sim-time-select" class="select-input">
+                                <option value="all">All Times</option>
+                                <option value="morning">Morning</option>
+                                <option value="afternoon">Afternoon</option>
+                                <option value="evening">Evening</option>
+                                <option value="night">Night</option>
                             </select>
                         </div>
                         <div id="sim-junction-stats" class="badge-accent">
