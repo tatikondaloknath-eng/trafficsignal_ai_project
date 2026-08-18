@@ -20,7 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (targetView === "dataset") loadDataset(1);
             if (targetView === "intersections") loadIntersections();
-            if (targetView === "reports") loadReports();
+            if (targetView === "reports") loadReports("all");
             if (targetView === "settings") loadSettings();
             if (targetView === "simulation") loadSimJunctionConfig();
         });
@@ -142,7 +142,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (optCycle) optCycle.innerText = `${result.cycle_time}s`;
                 if (optImpr) optImpr.innerText = `+${result.improvement}%`;
 
-                // Update Dashboard Summary
+                // Update Dashboard summary indicators
                 const dashOptCycle = document.getElementById("dash-opt-cycle");
                 const dashOptImpr = document.getElementById("dash-opt-impr");
                 if (dashOptCycle) dashOptCycle.innerText = `${result.cycle_time} sec`;
@@ -236,7 +236,6 @@ document.addEventListener("DOMContentLoaded", () => {
         update(activeDirection) {
             const canPass = activeDirection.startsWith(this.direction);
             
-            // Avoid car overlapping
             const ahead = vehiclesList.find(other => {
                 if (other === this || other.direction !== this.direction) return false;
                 if (this.direction === "NORTH") return other.y > this.y && (other.y - this.y) < 28;
@@ -254,7 +253,7 @@ document.addEventListener("DOMContentLoaded", () => {
             );
 
             if ((nearStopLine && !canPass && !this.crossed) || ahead) {
-                // Halt at stopline or queue
+                // Halt vehicle
             } else {
                 this.x += this.vx;
                 this.y += this.vy;
@@ -437,7 +436,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const startBtn = document.getElementById("sim-start-btn");
     startBtn?.addEventListener("click", () => {
         if (!simRunning) {
-            // Start or Resume
             simRunning = true;
             startBtn.innerHTML = `<i class="fa-solid fa-pause"></i> Pause Simulation`;
             startBtn.className = "btn btn-secondary";
@@ -471,7 +469,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }, 1000);
         } else {
-            // Pause
             simRunning = false;
             clearInterval(simTimerInterval);
             cancelAnimationFrame(simAnimationId);
@@ -488,20 +485,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
     document.getElementById("sim-reset-btn")?.addEventListener("click", resetSimulation);
 
-    // 6. REPORTS & SETTINGS
-    async function loadReports() {
+    // 6. REPORTS WITH DYNAMIC JUNCTION SELECTION
+    async function loadReports(junctionId = "all") {
         try {
-            const res = await fetch("/api/reports");
+            const res = await fetch(`/api/reports?junction=${junctionId}`);
             const r = await res.json();
             if (r.status === "success") {
                 document.getElementById("rep-wait").innerText = `${r.avg_waiting_time}s`;
                 document.getElementById("rep-impr").innerText = `+${r.optimization_improvement}%`;
                 document.getElementById("rep-density").innerText = r.traffic_density;
                 document.getElementById("rep-agents").innerText = r.active_agents;
+
+                if (document.getElementById("rep-speed")) {
+                    document.getElementById("rep-speed").innerText = `${r.avg_speed} km/h`;
+                }
+                if (document.getElementById("rep-total-veh")) {
+                    document.getElementById("rep-total-veh").innerText = Number(r.total_vehicles).toLocaleString();
+                }
+                if (document.getElementById("reports-header-badge")) {
+                    document.getElementById("reports-header-badge").innerText = 
+                        junctionId === "all" ? "Network View: 4 Active Agents" : `Junction ${junctionId}: Agent ${junctionId} Analytics`;
+                }
             }
-        } catch (e) { console.error(e); }
+        } catch (e) {
+            console.error("Reports fetch error:", e);
+        }
     }
 
+    document.getElementById("reports-junction-select")?.addEventListener("change", (e) => {
+        loadReports(e.target.value);
+    });
+
+    // 7. SETTINGS HANDLERS
     async function loadSettings() {
         try {
             const res = await fetch("/api/settings");
