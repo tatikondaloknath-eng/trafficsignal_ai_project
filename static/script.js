@@ -26,6 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const currentSimJ = document.getElementById("sim-junction-select")?.value || 1;
                 loadSimJunctionConfig(currentSimJ);
             }
+            if (targetView === "emergency") refreshEmergencyStatus();
         });
     });
 
@@ -492,6 +493,184 @@ document.addEventListener("DOMContentLoaded", () => {
 
     document.getElementById("sim-reset-btn")?.addEventListener("click", resetSimulation);
 
+
+
+    // -------------------------------------------------------------------------
+    // LIVE NETWORK & AMBULANCE EMERGENCY PAGE
+    // -------------------------------------------------------------------------
+    let emergencyAutoTimer = null;
+    let emergencyRoute = [];
+
+    function junctionLabel(id) { return `J${id}`; }
+
+    function renderEmergencyNetwork(data) {
+        if (!data) return;
+        emergencyRoute = data.emergency?.route || [];
+        const statuses = data.junction_status || {};
+        const congestion = data.congestion || {};
+        const emergency = data.emergency || {};
+
+        document.getElementById("emergency-mode-badge").innerText = emergency.active ? "EMERGENCY PRIORITY" : "NORMAL AI MODE";
+        document.getElementById("emergency-mode-badge").classList.toggle("active", !!emergency.active);
+
+        for (let j = 1; j <= 4; j++) {
+            const node = document.querySelector(`.network-junction[data-junction="${j}"]`);
+            const statusEl = document.getElementById(`net-j${j}-status`);
+            const status = statuses[j] || statuses[String(j)] || "NORMAL";
+            node.classList.remove("active", "preparing", "normal");
+            node.classList.add(status.toLowerCase().replace(" ", "-"));
+            statusEl.innerText = status;
+            const c = congestion[j] ?? congestion[String(j)] ?? 0;
+            document.getElementById(`congestion-j${j}`).innerText = `${Number(c).toFixed(0)}%`;
+        }
+
+        const routeText = emergencyRoute.length ? emergencyRoute.map(junctionLabel).join(" → ") : "--";
+        document.getElementById("emergency-route-text").innerText = routeText;
+        document.getElementById("emergency-eta").innerText = data.estimated_time_seconds ? `${Math.round(data.estimated_time_seconds / 60)} min` : "--";
+        renderEmergencySteps(emergency, statuses);
+        renderEmergencyCards(emergency, statuses, congestion);
+        moveAmbulanceMarker(emergency);
+        updateEmergencyRouteLine(emergencyRoute);
+        const progress = emergencyRoute.length > 1 && emergency.route_index != null ? (Number(emergency.route_index) / (emergencyRoute.length - 1)) * 100 : 0;
+        document.getElementById("emergency-progress-fill").style.width = `${Math.max(0, Math.min(100, progress))}%`;
+        document.getElementById("emergency-progress-label").innerText = emergency.active ? `${junctionLabel(emergency.current_junction)} → ${junctionLabel(emergency.destination)}` : "Waiting for emergency";
+    }
+
+    function renderEmergencySteps(emergency, statuses) {
+        const box = document.getElementById("emergency-route-steps");
+        if (!emergencyRoute.length) {
+            box.innerHTML = `<div class="empty-state">Activate an emergency to calculate an A* route.</div>`;
+            return;
+        }
+        box.innerHTML = emergencyRoute.map((j, i) => {
+            const status = statuses[j] || statuses[String(j)] || "NORMAL";
+            const eta = i === 0 ? "NOW" : `+${i * 2} min`;
+            return `<div class="route-step ${status.toLowerCase()}"><span class="step-index">${i + 1}</span><strong>${junctionLabel(j)}</strong><span>${status}</span><em>ETA ${eta}</em></div>`;
+        }).join("");
+    }
+
+    function renderEmergencyCards(emergency, statuses, congestion) {
+        const box = document.getElementById("emergency-junction-cards");
+        box.innerHTML = [1,2,3,4].map(j => {
+            const status = statuses[j] || statuses[String(j)] || "NORMAL";
+            const c = Number(congestion[j] ?? congestion[String(j)] ?? 0);
+            const trafficState = c >= 70 ? "HIGH" : c >= 40 ? "MEDIUM" : "LOW";
+            return `<div class="junction-live-card ${status.toLowerCase()}">
+                <div class="junction-live-head"><strong>J${j}</strong><span>${status}</span></div>
+                <div class="signal-row"><i class="signal-light red"></i><i class="signal-light yellow"></i><i class="signal-light green"></i></div>
+                <p>Traffic: <strong>${trafficState}</strong></p><p>Congestion: <strong>${c.toFixed(0)}%</strong></p>
+                <small>${status === "ACTIVE" ? "🚑 Ambulance priority active" : status === "PREPARING" ? "Preparing green corridor" : "Normal AI operation"}</small>
+            </div>`;
+        }).join("");
+    }
+
+    function updateEmergencyRouteLine(route) {
+        const line = document.getElementById("route-line");
+        if (!route || route.length < 2) {
+            line.style.display = "none";
+            return;
+        }
+        const positions = {1:[180,145], 2:[620,145], 3:[180,355], 4:[620,355]};
+        const points = route.map(j => positions[j]).filter(Boolean);
+        line.style.display = "block";
+        line.style.left = `${Math.min(...points.map(p => p[0]))}px`;
+        line.style.top = `${Math.min(...points.map(p => p[1]))}px`;
+        line.style.width = `${Math.max(40, Math.max(...points.map(p => p[0])) - Math.min(...points.map(p => p[0])))}px`;
+        line.style.height = `${Math.max(40, Math.max(...points.map(p => p[1])) - Math.min(...points.map(p => p[1])))}px`;
+    }
+
+    function moveAmbulanceMarker(emergency) {
+        const marker = document.getElementById("ambulance-marker");
+        const positions = {1:[180,145], 2:[620,145], 3:[180,355], 4:[620,355]};
+        const current = emergency.current_junction;
+        if (!current || !positions[current]) {
+            marker.style.display = "none";
+            return;
+        }
+        marker.style.display = "block";
+        marker.style.left = `${positions[current][0] - 18}px`;
+        marker.style.top = `${positions[current][1] - 60}px`;
+    }
+
+    async function refreshEmergencyStatus() {
+        try {
+            const res = await fetch("/api/emergency/status");
+            const data = await res.json();
+            if (data.status === "success") renderEmergencyNetwork(data);
+        } catch (e) { console.error("Emergency status error:", e); }
+    }
+
+    document.getElementById("emergency-form")?.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const current = Number(document.getElementById("emergency-current").value);
+        const destination = Number(document.getElementById("emergency-destination").value);
+        if (current === destination) {
+            alert("Current Junction and Destination must be different.");
+            return;
+        }
+        const btn = document.getElementById("emergency-activate-btn");
+        btn.disabled = true;
+        try {
+            const res = await fetch("/api/emergency/activate", {
+                method: "POST",
+                headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({
+                    ambulance_id: document.getElementById("emergency-ambulance-id").value,
+                    current_junction: current,
+                    destination,
+                    emergency_level: document.getElementById("emergency-level").value
+                })
+            });
+            const data = await res.json();
+            if (!res.ok || data.status !== "success") throw new Error(data.message || "Emergency activation failed");
+            renderEmergencyNetwork(data);
+        } catch (err) {
+            alert(err.message);
+        } finally { btn.disabled = false; }
+    });
+
+    async function advanceEmergency() {
+        try {
+            const statusRes = await fetch("/api/emergency/status");
+            const status = await statusRes.json();
+            const e = status.emergency;
+            if (!e?.active || !e.route?.length) return;
+            const nextIndex = Math.min((e.route_index || 0) + 1, e.route.length - 1);
+            const nextJunction = e.route[nextIndex];
+            const res = await fetch("/api/emergency/update", {
+                method: "POST", headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({current_junction: nextJunction})
+            });
+            const data = await res.json();
+            if (data.status === "success") {
+                renderEmergencyNetwork(data);
+                if (data.emergency.route_index >= data.emergency.route.length - 1) stopEmergencyAuto();
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    function stopEmergencyAuto() {
+        if (emergencyAutoTimer) clearInterval(emergencyAutoTimer);
+        emergencyAutoTimer = null;
+        const b = document.getElementById("emergency-auto-btn");
+        if (b) b.innerHTML = `<i class="fa-solid fa-forward"></i> Auto Move`;
+    }
+
+    document.getElementById("emergency-next-btn")?.addEventListener("click", advanceEmergency);
+    document.getElementById("emergency-auto-btn")?.addEventListener("click", () => {
+        if (emergencyAutoTimer) { stopEmergencyAuto(); return; }
+        advanceEmergency();
+        emergencyAutoTimer = setInterval(advanceEmergency, 2200);
+        document.getElementById("emergency-auto-btn").innerHTML = `<i class="fa-solid fa-pause"></i> Pause Auto`;
+    });
+
+    document.getElementById("emergency-clear-btn")?.addEventListener("click", async () => {
+        stopEmergencyAuto();
+        await fetch("/api/emergency/clear", {method:"POST"});
+        await refreshEmergencyStatus();
+    });
+
+
     // 6. REPORTS WITH DYNAMIC JUNCTION SELECTION
     async function loadReports(junctionId = "all") {
         try {
@@ -556,6 +735,8 @@ document.addEventListener("DOMContentLoaded", () => {
         loadDashboardStats();
         executeOptimization(dashJunctionSelect ? dashJunctionSelect.value : 1);
     });
+
+    refreshEmergencyStatus();
 
     // Initial Dashboard Load
     loadDashboardStats();
