@@ -343,6 +343,242 @@ def get_reports():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+
+# -----------------------------------------------------------------------------
+# Emergency Ambulance Priority Layer (software-only prototype)
+# -----------------------------------------------------------------------------
+# The ambulance operator supplies the current junction and destination through
+# the web UI. No GPS, IoT, camera, or traffic-controller hardware is required.
+EMERGENCY_STATE = {
+    "active": False,
+    "ambulance_id": None,
+    "current_junction": None,
+    "destination": None,
+    "emergency_level": "CRITICAL",
+    "route": [],
+    "route_index": 0,
+    "status": "NORMAL",
+    "started_at": None
+}
+
+JUNCTION_COORDS = {
+    1: (0, 0),
+    2: (1, 0),
+    3: (0, 1),
+    4: (1, 1)
+}
+
+# Four-junction road network used by the software simulation.
+# Edge values are nominal travel time in seconds; congestion is added at runtime.
+ROAD_GRAPH = {
+    1: {2: 90, 3: 70},
+    2: {1: 90, 3: 75, 4: 80},
+    3: {1: 70, 2: 75, 4: 65},
+    4: {2: 80, 3: 65}
+}
+
+
+def _junction_congestion():
+    """Return a simple congestion score (0-100) for each junction from the dataset."""
+    scores = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) AS total FROM traffic_data")
+            total = int(cursor.fetchone()["total"] or 0)
+            chunk = max(1, total // 4)
+            for jid in range(1, 5):
+                offset = (jid - 1) * chunk
+                cursor.execute(f"""
+                    SELECT
+                        COALESCE(AVG(vehicle_count), 0) AS vehicles,
+                        COALESCE(AVG(lane_occupancy), 0) AS occupancy,
+                        COALESCE(AVG(waiting_time), 0) AS waiting
+                    FROM (
+                        SELECT * FROM traffic_data
+                        ORDER BY id ASC
+                        LIMIT {chunk} OFFSET {offset}
+                    ) AS j_chunk
+                """)
+                row = cursor.fetchone() or {}
+                # Normalized project-level score. This is for simulation/routing,
+                # not a claim about a real road network.
+                score = (
+                    min(float(row.get("vehicles") or 0) / 2.0, 50.0)
+                    + min(float(row.get("occupancy") or 0) * 0.35, 35.0)
+                    + min(float(row.get("waiting") or 0) * 0.5, 15.0)
+                )
+                scores[jid] = round(min(score, 100.0), 1)
+        conn.close()
+    except Exception:
+        # Keep emergency demo usable even when the database is temporarily down.
+        scores = {1: 35.0, 2: 55.0, 3: 25.0, 4: 45.0}
+    return scores
+
+
+def _astar_route(start, goal, congestion):
+    """A* over the four-junction road graph using travel time + congestion cost."""
+    import heapq
+    import math
+
+    start, goal = int(start), int(goal)
+    if start == goal:
+        return [start], 0.0
+
+    def heuristic(node):
+        x1, y1 = JUNCTION_COORDS[node]
+        x2, y2 = JUNCTION_COORDS[goal]
+        return math.hypot(x2 - x1, y2 - y1) * 60.0
+
+    open_heap = [(heuristic(start), 0.0, start)]
+    came_from = {}
+    g_score = {start: 0.0}
+
+    while open_heap:
+        _, current_cost, current = heapq.heappop(open_heap)
+        if current == goal:
+            route = [current]
+            while current in came_from:
+                current = came_from[current]
+                route.append(current)
+            route.reverse()
+            return route, round(current_cost, 1)
+
+        if current_cost > g_score.get(current, float("inf")):
+            continue
+
+        for neighbor, base_time in ROAD_GRAPH.get(current, {}).items():
+            # Congestion penalty: a busy junction increases expected travel time.
+            edge_cost = float(base_time) * (1.0 + congestion.get(neighbor, 0.0) / 200.0)
+            tentative = current_cost + edge_cost
+            if tentative < g_score.get(neighbor, float("inf")):
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative
+                heapq.heappush(open_heap, (tentative + heuristic(neighbor), tentative, neighbor))
+
+    return [], 0.0
+
+
+def _emergency_status(congestion=None):
+    if congestion is None:
+        congestion = _junction_congestion()
+    route = EMERGENCY_STATE["route"]
+    idx = EMERGENCY_STATE["route_index"]
+    statuses = {}
+    for jid in range(1, 5):
+        if not EMERGENCY_STATE["active"]:
+            statuses[jid] = "NORMAL"
+        elif jid == route[idx]:
+            statuses[jid] = "ACTIVE"
+        elif jid in route[idx + 1:]:
+            statuses[jid] = "PREPARING"
+        else:
+            statuses[jid] = "NORMAL"
+    return statuses
+
+
+@app.route("/api/emergency/activate", methods=["POST"])
+def activate_emergency():
+    try:
+        data = request.json or {}
+        ambulance_id = str(data.get("ambulance_id", "AMB-001")).strip() or "AMB-001"
+        start = int(data.get("current_junction", 1))
+        destination = int(data.get("destination", 4))
+        level = str(data.get("emergency_level", "CRITICAL")).upper()
+
+        if start not in ROAD_GRAPH or destination not in ROAD_GRAPH:
+            return jsonify({"status": "error", "message": "Invalid junction selected."}), 400
+        if start == destination:
+            return jsonify({"status": "error", "message": "Current and destination junction cannot be the same."}), 400
+
+        congestion = _junction_congestion()
+        route, route_cost = _astar_route(start, destination, congestion)
+        if not route:
+            return jsonify({"status": "error", "message": "No route found."}), 400
+
+        from datetime import datetime, timezone
+        EMERGENCY_STATE.update({
+            "active": True,
+            "ambulance_id": ambulance_id,
+            "current_junction": start,
+            "destination": destination,
+            "emergency_level": level,
+            "route": route,
+            "route_index": 0,
+            "status": "EMERGENCY ACTIVE",
+            "started_at": datetime.now(timezone.utc).isoformat()
+        })
+
+        return jsonify({
+            "status": "success",
+            "emergency": EMERGENCY_STATE,
+            "route_cost_seconds": route_cost,
+            "estimated_time_seconds": route_cost,
+            "congestion": congestion,
+            "junction_status": _emergency_status(congestion)
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/emergency/status")
+def emergency_status():
+    congestion = _junction_congestion()
+    return jsonify({
+        "status": "success",
+        "emergency": EMERGENCY_STATE,
+        "congestion": congestion,
+        "junction_status": _emergency_status(congestion)
+    })
+
+
+@app.route("/api/emergency/update", methods=["POST"])
+def update_emergency_position():
+    try:
+        if not EMERGENCY_STATE["active"]:
+            return jsonify({"status": "error", "message": "No active emergency."}), 400
+
+        data = request.json or {}
+        requested = data.get("current_junction")
+        if requested is not None:
+            requested = int(requested)
+            route = EMERGENCY_STATE["route"]
+            if requested in route:
+                EMERGENCY_STATE["route_index"] = route.index(requested)
+                EMERGENCY_STATE["current_junction"] = requested
+
+        # Automatically finish when the destination becomes active/passed.
+        if EMERGENCY_STATE["route_index"] >= len(EMERGENCY_STATE["route"]) - 1:
+            EMERGENCY_STATE["status"] = "AT DESTINATION"
+
+        congestion = _junction_congestion()
+        return jsonify({
+            "status": "success",
+            "emergency": EMERGENCY_STATE,
+            "congestion": congestion,
+            "junction_status": _emergency_status(congestion)
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/emergency/clear", methods=["POST"])
+def clear_emergency():
+    EMERGENCY_STATE.update({
+        "active": False,
+        "ambulance_id": None,
+        "current_junction": None,
+        "destination": None,
+        "emergency_level": "CRITICAL",
+        "route": [],
+        "route_index": 0,
+        "status": "NORMAL",
+        "started_at": None
+    })
+    return jsonify({"status": "success", "message": "Emergency cleared. Normal AI optimization restored."})
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def handle_settings():
     global SYSTEM_SETTINGS
