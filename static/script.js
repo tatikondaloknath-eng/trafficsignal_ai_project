@@ -26,7 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const currentSimJ = document.getElementById("sim-junction-select")?.value || 1;
                 loadSimJunctionConfig(currentSimJ);
             }
-            if (targetView === "emergency") refreshEmergencyStatus();
+            if (targetView === "emergency") { resizeEmergencyCanvas(); refreshEmergencyStatus(); }
         });
     });
 
@@ -498,178 +498,183 @@ document.addEventListener("DOMContentLoaded", () => {
     // -------------------------------------------------------------------------
     // LIVE NETWORK & AMBULANCE EMERGENCY PAGE
     // -------------------------------------------------------------------------
-    let emergencyAutoTimer = null;
+    const emergencyCanvas = document.getElementById("emergencyNetworkCanvas");
+    const emergencyCtx = emergencyCanvas ? emergencyCanvas.getContext("2d") : null;
+    const emergencyNodePos = {1:{x:270,y:185}, 2:{x:930,y:185}, 3:{x:270,y:465}, 4:{x:930,y:465}};
+    const emergencyEdges = [[1,2],[2,4],[4,3],[3,1]];
+    const emergencyCars = [];
     let emergencyRoute = [];
+    let emergencySnapshot = null;
+    let emergencyAutoTimer = null;
+    let emergencyAnim = null;
+    let emergencyMoveFrom = null;
+    let emergencyMoveTo = null;
+    let emergencyMoveStarted = 0;
+    const emergencyMoveDuration = 2800;
+    let emergencyNetworkStarted = performance.now();
 
     function junctionLabel(id) { return `J${id}`; }
-
-    function renderEmergencyNetwork(data) {
-        if (!data) return;
-        emergencyRoute = data.emergency?.route || [];
-        const statuses = data.junction_status || {};
-        const congestion = data.congestion || {};
-        const emergency = data.emergency || {};
-
-        document.getElementById("emergency-mode-badge").innerText = emergency.active ? "EMERGENCY PRIORITY" : "NORMAL AI MODE";
-        document.getElementById("emergency-mode-badge").classList.toggle("active", !!emergency.active);
-
-        for (let j = 1; j <= 4; j++) {
-            const node = document.querySelector(`.network-junction[data-junction="${j}"]`);
-            const statusEl = document.getElementById(`net-j${j}-status`);
-            const status = statuses[j] || statuses[String(j)] || "NORMAL";
-            node.classList.remove("active", "preparing", "normal");
-            node.classList.add(status.toLowerCase().replace(" ", "-"));
-            statusEl.innerText = status;
-            const c = congestion[j] ?? congestion[String(j)] ?? 0;
-            document.getElementById(`congestion-j${j}`).innerText = `${Number(c).toFixed(0)}%`;
+    function statusFor(j) {
+        const s = emergencySnapshot?.junction_status || {};
+        return s[j] || s[String(j)] || "NORMAL";
+    }
+    function isRouteEdge(a,b) {
+        if (!emergencyRoute.length) return false;
+        for (let i=0;i<emergencyRoute.length-1;i++) {
+            if ((emergencyRoute[i]===a && emergencyRoute[i+1]===b) || (emergencyRoute[i]===b && emergencyRoute[i+1]===a)) return true;
         }
-
-        const routeText = emergencyRoute.length ? emergencyRoute.map(junctionLabel).join(" → ") : "--";
-        document.getElementById("emergency-route-text").innerText = routeText;
-        document.getElementById("emergency-eta").innerText = data.estimated_time_seconds ? `${Math.round(data.estimated_time_seconds / 60)} min` : "--";
-        renderEmergencySteps(emergency, statuses);
-        renderEmergencyCards(emergency, statuses, congestion);
-        moveAmbulanceMarker(emergency);
-        updateEmergencyRouteLine(emergencyRoute);
-        const progress = emergencyRoute.length > 1 && emergency.route_index != null ? (Number(emergency.route_index) / (emergencyRoute.length - 1)) * 100 : 0;
-        document.getElementById("emergency-progress-fill").style.width = `${Math.max(0, Math.min(100, progress))}%`;
-        document.getElementById("emergency-progress-label").innerText = emergency.active ? `${junctionLabel(emergency.current_junction)} → ${junctionLabel(emergency.destination)}` : "Waiting for emergency";
+        return false;
     }
-
-    function renderEmergencySteps(emergency, statuses) {
-        const box = document.getElementById("emergency-route-steps");
-        if (!emergencyRoute.length) {
-            box.innerHTML = `<div class="empty-state">Activate an emergency to calculate an A* route.</div>`;
-            return;
+    function seedEmergencyCars() {
+        if (emergencyCars.length) return;
+        const edges = [[1,2],[2,4],[4,3],[3,1],[2,1],[4,2],[3,4],[1,3]];
+        edges.forEach((edge, idx) => {
+            for (let k=0;k<4;k++) emergencyCars.push({edge, t:(idx*0.17+k*0.21)%1, speed:0.035+(k%3)*0.006, lane:(k%2)});
+        });
+    }
+    function resizeEmergencyCanvas() {
+        if (!emergencyCanvas) return;
+        const rect = emergencyCanvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        emergencyCanvas.width = Math.max(600, Math.floor(rect.width*dpr));
+        emergencyCanvas.height = Math.max(420, Math.floor(rect.height*dpr));
+        emergencyCtx.setTransform(dpr,0,0,dpr,0,0);
+    }
+    function scaleEmergencyPoint(p) {
+        const w = emergencyCanvas?.getBoundingClientRect().width || 1200;
+        const h = emergencyCanvas?.getBoundingClientRect().height || 650;
+        return {x:p.x/1200*w, y:p.y/650*h};
+    }
+    function roundedRect(ctx,x,y,w,h,r) {
+        const rr=Math.min(r,w/2,h/2); ctx.beginPath(); ctx.moveTo(x+rr,y); ctx.arcTo(x+w,y,x+w,y+h,rr); ctx.arcTo(x+w,y+h,x,y+h,rr); ctx.arcTo(x,y+h,x,y,rr); ctx.arcTo(x,y,x+w,y,rr); ctx.closePath();
+    }
+    function drawRoadNetwork(now) {
+        if (!emergencyCtx || !emergencyCanvas) return;
+        const rect=emergencyCanvas.getBoundingClientRect(), W=rect.width, H=rect.height;
+        const sx=W/1200, sy=H/650;
+        const ctx=emergencyCtx;
+        ctx.clearRect(0,0,W,H);
+        ctx.save(); ctx.scale(sx,sy);
+        // background
+        const bg=ctx.createLinearGradient(0,0,1200,650); bg.addColorStop(0,"#081127"); bg.addColorStop(1,"#101d3b"); ctx.fillStyle=bg; ctx.fillRect(0,0,1200,650);
+        // subtle grid
+        ctx.strokeStyle="rgba(72,202,228,.045)"; ctx.lineWidth=1;
+        for(let x=0;x<1200;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,650);ctx.stroke();}
+        for(let y=0;y<650;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(1200,y);ctx.stroke();}
+        // route corridor first
+        if(emergencyRoute.length>1){
+            ctx.lineCap="round"; ctx.lineJoin="round"; ctx.strokeStyle="rgba(255,62,165,.18)"; ctx.lineWidth=54;
+            for(let i=0;i<emergencyRoute.length-1;i++){const a=emergencyNodePos[emergencyRoute[i]],b=emergencyNodePos[emergencyRoute[i+1]];ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+            ctx.setLineDash([18,12]); ctx.strokeStyle="#ff3ea5"; ctx.lineWidth=6;
+            for(let i=0;i<emergencyRoute.length-1;i++){const a=emergencyNodePos[emergencyRoute[i]],b=emergencyNodePos[emergencyRoute[i+1]];ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+            ctx.setLineDash([]);
         }
-        box.innerHTML = emergencyRoute.map((j, i) => {
-            const status = statuses[j] || statuses[String(j)] || "NORMAL";
-            const eta = i === 0 ? "NOW" : `+${i * 2} min`;
-            return `<div class="route-step ${status.toLowerCase()}"><span class="step-index">${i + 1}</span><strong>${junctionLabel(j)}</strong><span>${status}</span><em>ETA ${eta}</em></div>`;
-        }).join("");
+        // roads
+        ctx.lineCap="butt";
+        emergencyEdges.forEach(([a,b])=>{
+            const p=emergencyNodePos[a], q=emergencyNodePos[b];
+            ctx.strokeStyle=isRouteEdge(a,b)?"#2d3154":"#293653"; ctx.lineWidth=86;
+            ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();
+            ctx.strokeStyle="#1c2946"; ctx.lineWidth=4; ctx.setLineDash([22,18]);
+            ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();ctx.setLineDash([]);
+            ctx.strokeStyle="#4b5d7c"; ctx.lineWidth=1.5;
+            ctx.beginPath();ctx.moveTo(p.x,p.y-38);ctx.lineTo(q.x,q.y-38);ctx.stroke();
+            ctx.beginPath();ctx.moveTo(p.x,p.y+38);ctx.lineTo(q.x,q.y+38);ctx.stroke();
+        });
+        // outside approach roads
+        [[{x:0,y:185},{x:270,y:185}],[{x:930,y:185},{x:1200,y:185}],[{x:0,y:465},{x:270,y:465}],[{x:930,y:465},{x:1200,y:465}],[{x:270,y:0},{x:270,y:185}],[{x:930,y:0},{x:930,y:185}],[{x:270,y:465},{x:270,y:650}],[{x:930,y:465},{x:930,y:650}]].forEach(([p,q])=>{ctx.strokeStyle="#293653";ctx.lineWidth=86;ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();ctx.strokeStyle="#1c2946";ctx.lineWidth=4;ctx.setLineDash([22,18]);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();ctx.setLineDash([]);});
+        // cars
+        seedEmergencyCars();
+        emergencyCars.forEach((car,idx)=>{
+            car.t=(car.t+car.speed*0.016)%1; const a=emergencyNodePos[car.edge[0]],b=emergencyNodePos[car.edge[1]];
+            const x=a.x+(b.x-a.x)*car.t, y=a.y+(b.y-a.y)*car.t;
+            const horizontal=Math.abs(b.x-a.x)>Math.abs(b.y-a.y);
+            ctx.save();ctx.translate(x,y); if(!horizontal)ctx.rotate(Math.PI/2);
+            ctx.fillStyle=idx%4===0?"#48cae4":idx%4===1?"#ffd166":idx%4===2?"#06d6a0":"#b8c4d6";
+            roundedRect(ctx,-13,-7,26,14,3);ctx.fill();ctx.fillStyle="#dce8ff";ctx.fillRect(1,-5,7,10);ctx.restore();
+        });
+        // junctions and signal heads
+        [1,2,3,4].forEach(j=>drawEmergencyJunction(ctx,j));
+        // ambulance
+        drawEmergencyAmbulance(ctx,now);
+        ctx.restore();
+        document.getElementById("network-clock")?.replaceChildren(document.createTextNode(formatNetworkTime(now)));
     }
-
-    function renderEmergencyCards(emergency, statuses, congestion) {
-        const box = document.getElementById("emergency-junction-cards");
-        box.innerHTML = [1,2,3,4].map(j => {
-            const status = statuses[j] || statuses[String(j)] || "NORMAL";
-            const c = Number(congestion[j] ?? congestion[String(j)] ?? 0);
-            const trafficState = c >= 70 ? "HIGH" : c >= 40 ? "MEDIUM" : "LOW";
-            return `<div class="junction-live-card ${status.toLowerCase()}">
-                <div class="junction-live-head"><strong>J${j}</strong><span>${status}</span></div>
-                <div class="signal-row"><i class="signal-light red"></i><i class="signal-light yellow"></i><i class="signal-light green"></i></div>
-                <p>Traffic: <strong>${trafficState}</strong></p><p>Congestion: <strong>${c.toFixed(0)}%</strong></p>
-                <small>${status === "ACTIVE" ? "🚑 Ambulance priority active" : status === "PREPARING" ? "Preparing green corridor" : "Normal AI operation"}</small>
-            </div>`;
-        }).join("");
+    function formatNetworkTime(now){const s=Math.floor((now-emergencyNetworkStarted)/1000);return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;}
+    function drawEmergencyJunction(ctx,j){
+        const p=emergencyNodePos[j], status=statusFor(j);
+        const ring=status==="ACTIVE"?"#ff3ea5":status==="PREPARING"?"#ffd166":"#4b5d7c";
+        ctx.save();
+        ctx.shadowBlur=status==="ACTIVE"?28:status==="PREPARING"?18:8; ctx.shadowColor=ring;
+        ctx.fillStyle="#101a34";ctx.strokeStyle=ring;ctx.lineWidth=5;ctx.beginPath();ctx.arc(p.x,p.y,52,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.shadowBlur=0;
+        ctx.fillStyle="#f0f4f8";ctx.font="800 22px Segoe UI";ctx.textAlign="center";ctx.fillText(`J${j}`,p.x,p.y+7);
+        ctx.font="700 11px Segoe UI";ctx.fillStyle=ring;ctx.fillText(status,p.x,p.y+72);
+        // signal heads: actual colors are red/yellow/green
+        const signalMode=status==="ACTIVE"?"GREEN":status==="PREPARING"?"YELLOW":(Math.floor((performance.now()-emergencyNetworkStarted)/4500)+j)%3===0?"GREEN":"RED";
+        [[p.x-67,p.y-67],[p.x+55,p.y-67],[p.x-67,p.y+55],[p.x+55,p.y+55]].forEach((sp,i)=>{
+            ctx.fillStyle="#111827";roundedRect(ctx,sp[0],sp[1],22,32,5);ctx.fill();
+            ["RED","YELLOW","GREEN"].forEach((c,k)=>{ctx.beginPath();ctx.arc(sp[0]+11,sp[1]+7+k*9,3.3,0,Math.PI*2);ctx.fillStyle=signalMode===c?({RED:"#ef476f",YELLOW:"#ffd166",GREEN:"#06d6a0"}[c]):"#2c3549";ctx.fill();});
+        });
+        ctx.restore();
     }
-
-    function updateEmergencyRouteLine(route) {
-        const line = document.getElementById("route-line");
-        if (!route || route.length < 2) {
-            line.style.display = "none";
-            return;
-        }
-        const positions = {1:[180,145], 2:[620,145], 3:[180,355], 4:[620,355]};
-        const points = route.map(j => positions[j]).filter(Boolean);
-        line.style.display = "block";
-        line.style.left = `${Math.min(...points.map(p => p[0]))}px`;
-        line.style.top = `${Math.min(...points.map(p => p[1]))}px`;
-        line.style.width = `${Math.max(40, Math.max(...points.map(p => p[0])) - Math.min(...points.map(p => p[0])))}px`;
-        line.style.height = `${Math.max(40, Math.max(...points.map(p => p[1])) - Math.min(...points.map(p => p[1])))}px`;
+    function drawEmergencyAmbulance(ctx,now){
+        const e=emergencySnapshot?.emergency; if(!e?.active || !e.route?.length)return;
+        let from=e.route[e.route_index]||e.current_junction, to=from, t=0;
+        if(emergencyMoveFrom!=null && emergencyMoveTo!=null){from=emergencyMoveFrom;to=emergencyMoveTo;t=Math.min(1,(now-emergencyMoveStarted)/emergencyMoveDuration);}
+        const a=emergencyNodePos[from],b=emergencyNodePos[to],x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t;
+        ctx.save();ctx.translate(x,y);ctx.shadowBlur=25;ctx.shadowColor="#ff3ea5";ctx.fillStyle="#f7f7f7";roundedRect(ctx,-25,-13,50,26,6);ctx.fill();ctx.fillStyle="#ef476f";ctx.fillRect(-25,-3,50,6);ctx.fillStyle="#bde9ff";ctx.fillRect(-10,-10,18,7);ctx.fillStyle="#ff3ea5";ctx.fillRect(14,-10,7,7);ctx.fillStyle="#111";ctx.beginPath();ctx.arc(-15,13,5,0,Math.PI*2);ctx.arc(15,13,5,0,Math.PI*2);ctx.fill();ctx.fillStyle="#fff";ctx.font="900 10px Segoe UI";ctx.textAlign="center";ctx.fillText("AMB",0,3);ctx.restore();
     }
+    function emergencyAnimationLoop(now){drawRoadNetwork(now);emergencyAnim=requestAnimationFrame(emergencyAnimationLoop);}
+    if(emergencyCanvas){resizeEmergencyCanvas();seedEmergencyCars();emergencyAnim=requestAnimationFrame(emergencyAnimationLoop);window.addEventListener("resize",resizeEmergencyCanvas);}
 
-    function moveAmbulanceMarker(emergency) {
-        const marker = document.getElementById("ambulance-marker");
-        const positions = {1:[180,145], 2:[620,145], 3:[180,355], 4:[620,355]};
-        const current = emergency.current_junction;
-        if (!current || !positions[current]) {
-            marker.style.display = "none";
-            return;
-        }
-        marker.style.display = "block";
-        marker.style.left = `${positions[current][0] - 18}px`;
-        marker.style.top = `${positions[current][1] - 60}px`;
+    function renderEmergencyNetwork(data){
+        if(!data)return;
+        emergencySnapshot=data; emergencyRoute=data.emergency?.route||[];
+        const statuses=data.junction_status||{}, congestion=data.congestion||{}, e=data.emergency||{};
+        const active=!!e.active;
+        const badge=document.getElementById("emergency-mode-badge");
+        badge.classList.toggle("active",active); badge.innerHTML=`<span class="status-dot-mini"></span>${active?"EMERGENCY PRIORITY ACTIVE":"NORMAL AI MODE"}`;
+        document.getElementById("network-route-state").innerText=active?"EMERGENCY CORRIDOR":"AI OPTIMIZED";
+        document.getElementById("network-emergency-banner").classList.toggle("hidden",!active);
+        document.getElementById("network-banner-text").innerText=active?`${e.ambulance_id||"AMB-001"} • ${e.emergency_level||"CRITICAL"} • GREEN CORRIDOR ACTIVE`:"";
+        document.getElementById("emergency-route-text").innerText=emergencyRoute.length?emergencyRoute.map(junctionLabel).join(" → "):"Waiting for emergency";
+        document.getElementById("emergency-eta").innerText=data.estimated_time_seconds?`${Math.max(1,Math.round(data.estimated_time_seconds/60))} min`:"--";
+        document.getElementById("emergency-current-readout").innerText=e.current_junction?junctionLabel(e.current_junction):"—";
+        const nextIdx=e.route_index!=null?Number(e.route_index)+1:-1;
+        document.getElementById("emergency-next-readout").innerText=active&&nextIdx<emergencyRoute.length?junctionLabel(emergencyRoute[nextIdx]):(active?"Destination":"—");
+        document.getElementById("emergency-level-readout").innerText=active?(e.emergency_level||"CRITICAL"):"—";
+        [1,2,3,4].forEach(j=>{const c=Number(congestion[j]??congestion[String(j)]??0);document.getElementById(`congestion-j${j}`).innerText=`${c.toFixed(0)}%`;});
+        renderEmergencySteps(e,statuses); renderEmergencyCards(e,statuses,congestion);
+        const progress=emergencyRoute.length>1&&e.route_index!=null?(Number(e.route_index)/(emergencyRoute.length-1))*100:0;
+        document.getElementById("emergency-progress-fill").style.width=`${Math.max(0,Math.min(100,progress))}%`;
+        document.getElementById("emergency-progress-label").innerText=active?`${junctionLabel(e.current_junction)} → ${junctionLabel(e.destination)}`:"Normal traffic operation";
+        document.getElementById("network-vehicles").innerText=Math.round(24+Object.values(congestion).reduce((a,v)=>a+Number(v||0),0)/25);
+        document.getElementById("network-avg-wait").innerText=`${Math.round(Object.values(congestion).reduce((a,v)=>a+Number(v||0),0)/4)}s`;
+        if(active){document.getElementById("emergency-current").value=String(e.current_junction||1);}
     }
-
-    async function refreshEmergencyStatus() {
-        try {
-            const res = await fetch("/api/emergency/status");
-            const data = await res.json();
-            if (data.status === "success") renderEmergencyNetwork(data);
-        } catch (e) { console.error("Emergency status error:", e); }
+    function renderEmergencySteps(e,statuses){
+        const box=document.getElementById("emergency-route-steps");
+        if(!emergencyRoute.length){box.innerHTML=`<div class="empty-state">Activate an emergency to calculate the route.</div>`;return;}
+        box.innerHTML=emergencyRoute.map((j,i)=>{const s=statuses[j]||statuses[String(j)]||"NORMAL";const stateClass=s.toLowerCase();const marker=i===Number(e.route_index)?"NOW":i<Number(e.route_index||0)?"PASSED":"NEXT";return `<div class="route-step ${stateClass}"><span class="step-index">${i+1}</span><strong>${junctionLabel(j)}</strong><span>${s}</span><em>${marker}</em></div>`;}).join("");
     }
+    function renderEmergencyCards(e,statuses,congestion){
+        const box=document.getElementById("emergency-junction-cards");
+        box.innerHTML=[1,2,3,4].map(j=>{const s=statuses[j]||statuses[String(j)]||"NORMAL";const c=Number(congestion[j]??congestion[String(j)]??0);const traffic=c>=70?"HIGH":c>=40?"MEDIUM":"LOW";const sig=s==="ACTIVE"?"GREEN":s==="PREPARING"?"YELLOW":"RED";return `<div class="junction-live-card ${s.toLowerCase()}"><div class="junction-live-head"><strong>J${j}</strong><span>${s}</span></div><div class="junction-card-signals"><i class="signal-light red ${sig==='RED'?'on':''}"></i><i class="signal-light yellow ${sig==='YELLOW'?'on':''}"></i><i class="signal-light green ${sig==='GREEN'?'on':''}"></i></div><div class="junction-card-data"><span>Traffic <b>${traffic}</b></span><span>Congestion <b>${c.toFixed(0)}%</b></span></div><small>${s==="ACTIVE"?"🚑 Ambulance priority active":s==="PREPARING"?"🟡 Preparing green corridor":"AI signal optimization active"}</small></div>`;}).join("");
+    }
+    async function refreshEmergencyStatus(){try{const res=await fetch("/api/emergency/status");const data=await res.json();if(data.status==="success")renderEmergencyNetwork(data);}catch(e){console.error("Emergency status error:",e);}}
 
-    document.getElementById("emergency-form")?.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const current = Number(document.getElementById("emergency-current").value);
-        const destination = Number(document.getElementById("emergency-destination").value);
-        if (current === destination) {
-            alert("Current Junction and Destination must be different.");
-            return;
-        }
-        const btn = document.getElementById("emergency-activate-btn");
-        btn.disabled = true;
-        try {
-            const res = await fetch("/api/emergency/activate", {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({
-                    ambulance_id: document.getElementById("emergency-ambulance-id").value,
-                    current_junction: current,
-                    destination,
-                    emergency_level: document.getElementById("emergency-level").value
-                })
-            });
-            const data = await res.json();
-            if (!res.ok || data.status !== "success") throw new Error(data.message || "Emergency activation failed");
-            renderEmergencyNetwork(data);
-        } catch (err) {
-            alert(err.message);
-        } finally { btn.disabled = false; }
+    document.getElementById("emergency-form")?.addEventListener("submit",async(e)=>{
+        e.preventDefault(); const current=Number(document.getElementById("emergency-current").value),destination=Number(document.getElementById("emergency-destination").value); if(current===destination){alert("Current Junction and Destination must be different.");return;}
+        const btn=document.getElementById("emergency-activate-btn");btn.disabled=true;stopEmergencyAuto();
+        try{const res=await fetch("/api/emergency/activate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ambulance_id:document.getElementById("emergency-ambulance-id").value,current_junction:current,destination,emergency_level:document.getElementById("emergency-level").value})});const data=await res.json();if(!res.ok||data.status!=="success")throw new Error(data.message||"Emergency activation failed"); emergencyMoveFrom=null;emergencyMoveTo=null;renderEmergencyNetwork(data);}catch(err){alert(err.message);}finally{btn.disabled=false;}
     });
-
-    async function advanceEmergency() {
-        try {
-            const statusRes = await fetch("/api/emergency/status");
-            const status = await statusRes.json();
-            const e = status.emergency;
-            if (!e?.active || !e.route?.length) return;
-            const nextIndex = Math.min((e.route_index || 0) + 1, e.route.length - 1);
-            const nextJunction = e.route[nextIndex];
-            const res = await fetch("/api/emergency/update", {
-                method: "POST", headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({current_junction: nextJunction})
-            });
-            const data = await res.json();
-            if (data.status === "success") {
-                renderEmergencyNetwork(data);
-                if (data.emergency.route_index >= data.emergency.route.length - 1) stopEmergencyAuto();
-            }
-        } catch (e) { console.error(e); }
+    async function advanceEmergency(){
+        try{const sres=await fetch("/api/emergency/status"),s=await sres.json(),e=s.emergency;if(!e?.active||!e.route?.length)return;const idx=Number(e.route_index||0);if(idx>=e.route.length-1){stopEmergencyAuto();return;}emergencyMoveFrom=e.route[idx];emergencyMoveTo=e.route[idx+1];emergencyMoveStarted=performance.now();setTimeout(async()=>{const res=await fetch("/api/emergency/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({current_junction:emergencyMoveTo})});const data=await res.json();if(data.status==="success"){emergencyMoveFrom=null;emergencyMoveTo=null;renderEmergencyNetwork(data);if(Number(data.emergency.route_index)>=data.emergency.route.length-1)stopEmergencyAuto();}},emergencyMoveDuration);}catch(err){console.error(err);}
     }
-
-    function stopEmergencyAuto() {
-        if (emergencyAutoTimer) clearInterval(emergencyAutoTimer);
-        emergencyAutoTimer = null;
-        const b = document.getElementById("emergency-auto-btn");
-        if (b) b.innerHTML = `<i class="fa-solid fa-forward"></i> Auto Move`;
-    }
-
-    document.getElementById("emergency-next-btn")?.addEventListener("click", advanceEmergency);
-    document.getElementById("emergency-auto-btn")?.addEventListener("click", () => {
-        if (emergencyAutoTimer) { stopEmergencyAuto(); return; }
-        advanceEmergency();
-        emergencyAutoTimer = setInterval(advanceEmergency, 2200);
-        document.getElementById("emergency-auto-btn").innerHTML = `<i class="fa-solid fa-pause"></i> Pause Auto`;
-    });
-
-    document.getElementById("emergency-clear-btn")?.addEventListener("click", async () => {
-        stopEmergencyAuto();
-        await fetch("/api/emergency/clear", {method:"POST"});
-        await refreshEmergencyStatus();
-    });
-
+    function stopEmergencyAuto(){if(emergencyAutoTimer)clearInterval(emergencyAutoTimer);emergencyAutoTimer=null;const b=document.getElementById("emergency-auto-btn");if(b)b.innerHTML=`<i class="fa-solid fa-play"></i> Auto Move Ambulance`;}
+    document.getElementById("emergency-next-btn")?.addEventListener("click",()=>{if(emergencySnapshot?.emergency?.active)advanceEmergency();});
+    document.getElementById("emergency-auto-btn")?.addEventListener("click",()=>{if(emergencyAutoTimer){stopEmergencyAuto();return;}if(!emergencySnapshot?.emergency?.active)return;advanceEmergency();emergencyAutoTimer=setInterval(advanceEmergency,emergencyMoveDuration+350);document.getElementById("emergency-auto-btn").innerHTML=`<i class="fa-solid fa-pause"></i> Pause Ambulance`;});
+    document.getElementById("emergency-clear-btn")?.addEventListener("click",async()=>{stopEmergencyAuto();try{await fetch("/api/emergency/clear",{method:"POST"});await refreshEmergencyStatus();}catch(e){console.error(e);}});
 
     // 6. REPORTS WITH DYNAMIC JUNCTION SELECTION
     async function loadReports(junctionId = "all") {
