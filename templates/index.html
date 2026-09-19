@@ -23,6 +23,7 @@
                 <button class="nav-item" data-view="dataset"><i class="fa-solid fa-database"></i> Dataset</button>
                 <button class="nav-item" data-view="intersections"><i class="fa-solid fa-code-branch"></i> Intersections</button>
                 <button class="nav-item" data-view="optimization"><i class="fa-solid fa-brain"></i> AI Optimization</button>
+                <button class="nav-item emergency-nav" data-view="emergency"><i class="fa-solid fa-truck-medical"></i> Live Network & Ambulance</button>
                 <button class="nav-item" data-view="simulation"><i class="fa-solid fa-car-side"></i> Simulation</button>
                 <button class="nav-item" data-view="reports"><i class="fa-solid fa-file-waveform"></i> Reports</button>
                 <button class="nav-item" data-view="settings"><i class="fa-solid fa-sliders"></i> Settings</button>
@@ -303,6 +304,85 @@
                             </table>
                         </div>
                     </div>
+                </div>
+            </section>
+
+            <!-- VIEW 5: LIVE NETWORK & AMBULANCE -->
+            <section id="view-emergency" class="content-view">
+                <div class="emergency-page-grid">
+                    <div class="card emergency-map-card">
+                        <div class="section-heading-row">
+                            <div>
+                                <h3><i class="fa-solid fa-truck-medical emergency-icon"></i> Live Network & Ambulance Optimization</h3>
+                                <p>Software-only four-junction emergency corridor simulation using A* routing and traffic-aware junction coordination.</p>
+                            </div>
+                            <span id="emergency-mode-badge" class="emergency-mode-badge">NORMAL AI MODE</span>
+                        </div>
+
+                        <div class="network-map" id="network-map">
+                            <svg class="network-lines" viewBox="0 0 800 500" preserveAspectRatio="none" aria-hidden="true">
+                                <line x1="180" y1="145" x2="620" y2="145" class="road-line"/>
+                                <line x1="180" y1="355" x2="620" y2="355" class="road-line"/>
+                                <line x1="180" y1="145" x2="180" y2="355" class="road-line"/>
+                                <line x1="620" y1="145" x2="620" y2="355" class="road-line"/>
+                                <line x1="180" y1="145" x2="620" y2="355" class="road-line secondary-road"/>
+                            </svg>
+                            <div class="route-line" id="route-line"></div>
+                            <div class="network-junction j1" data-junction="1"><strong>J1</strong><span>Junction 1</span><small id="net-j1-status">NORMAL</small></div>
+                            <div class="network-junction j2" data-junction="2"><strong>J2</strong><span>Junction 2</span><small id="net-j2-status">NORMAL</small></div>
+                            <div class="network-junction j3" data-junction="3"><strong>J3</strong><span>Junction 3</span><small id="net-j3-status">NORMAL</small></div>
+                            <div class="network-junction j4" data-junction="4"><strong>J4</strong><span>Junction 4</span><small id="net-j4-status">NORMAL</small></div>
+                            <div class="ambulance-marker" id="ambulance-marker" title="Ambulance">🚑</div>
+                            <div class="map-legend">
+                                <span><i class="legend-dot normal"></i> Normal</span>
+                                <span><i class="legend-dot preparing"></i> Preparing</span>
+                                <span><i class="legend-dot active"></i> Emergency Active</span>
+                                <span><i class="legend-line"></i> A* Route</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card emergency-control-card">
+                        <div class="card-title-row"><h3><i class="fa-solid fa-truck-medical"></i> Emergency Vehicle Control</h3></div>
+                        <form id="emergency-form" class="emergency-form">
+                            <div class="form-group"><label>Ambulance ID</label><input id="emergency-ambulance-id" class="input-field" value="AMB-001" maxlength="30"></div>
+                            <div class="form-group"><label>Current Junction</label><select id="emergency-current" class="select-input"><option value="1">Junction 1 (J1)</option><option value="2">Junction 2 (J2)</option><option value="3">Junction 3 (J3)</option><option value="4">Junction 4 (J4)</option></select></div>
+                            <div class="form-group"><label>Destination</label><select id="emergency-destination" class="select-input"><option value="1">Junction 1 (J1)</option><option value="2">Junction 2 (J2)</option><option value="3">Junction 3 (J3)</option><option value="4" selected>Junction 4 (J4) - Hospital</option></select></div>
+                            <div class="form-group"><label>Emergency Level</label><select id="emergency-level" class="select-input"><option>CRITICAL</option><option>HIGH</option></select></div>
+                            <button type="submit" class="btn btn-emergency" id="emergency-activate-btn"><i class="fa-solid fa-siren-on"></i> Activate Emergency Corridor</button>
+                        </form>
+                        <button class="btn btn-danger emergency-clear-btn" id="emergency-clear-btn"><i class="fa-solid fa-circle-stop"></i> End Emergency & Restore AI</button>
+                    </div>
+                </div>
+
+                <div class="emergency-dashboard-grid mt-4">
+                    <div class="card">
+                        <div class="card-title-row"><h3><i class="fa-solid fa-route"></i> Route & ETA (A* Optimized)</h3></div>
+                        <div class="route-summary"><span>Optimal Route</span><strong id="emergency-route-text">J1 → J3 → J4</strong></div>
+                        <div class="route-summary"><span>Estimated Time</span><strong id="emergency-eta">--</strong></div>
+                        <div id="emergency-route-steps" class="route-steps"></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title-row"><h3><i class="fa-solid fa-chart-line"></i> Network Optimization</h3></div>
+                        <div class="mini-metrics-grid">
+                            <div><span>J1 Traffic</span><strong id="congestion-j1">--</strong></div>
+                            <div><span>J2 Traffic</span><strong id="congestion-j2">--</strong></div>
+                            <div><span>J3 Traffic</span><strong id="congestion-j3">--</strong></div>
+                            <div><span>J4 Traffic</span><strong id="congestion-j4">--</strong></div>
+                        </div>
+                        <div class="emergency-note"><i class="fa-solid fa-circle-info"></i> Pink indicates emergency coordination only. Actual signals remain Red/Yellow/Green.</div>
+                    </div>
+                </div>
+
+                <div class="junction-status-grid mt-4" id="emergency-junction-cards"></div>
+
+                <div class="card mt-4 emergency-sim-controls">
+                    <div class="section-heading-row">
+                        <div><h3><i class="fa-solid fa-play"></i> Ambulance Movement Simulation</h3><p>Use Auto Move or advance the ambulance one junction at a time.</p></div>
+                        <div class="sim-controls"><button class="btn btn-primary" id="emergency-auto-btn"><i class="fa-solid fa-forward"></i> Auto Move</button><button class="btn btn-secondary" id="emergency-next-btn"><i class="fa-solid fa-arrow-right"></i> Next Junction</button></div>
+                    </div>
+                    <div class="progress-track"><div class="progress-fill" id="emergency-progress-fill"></div></div>
+                    <div class="progress-labels"><span>Start</span><strong id="emergency-progress-label">Waiting for emergency</strong><span>Destination</span></div>
                 </div>
             </section>
 
