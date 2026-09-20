@@ -52,9 +52,51 @@ def get_db_connection():
     ssl_config = {"ca": DB_CA_FILE} if os.path.exists(DB_CA_FILE) else None
     return pymysql.connect(host=DB_HOST,port=DB_PORT,user=DB_USER,password=DB_PASSWORD,database=DB_NAME,charset="utf8mb4",cursorclass=pymysql.cursors.DictCursor,connect_timeout=15,ssl=ssl_config)
 
+# Idempotent schema migration. Earlier project versions created emergency_requests
+# without all fields used by the current controller (notably segment_seconds).
+# This migration upgrades an existing table without deleting emergency history.
+_EMERGENCY_SCHEMA_READY = False
+_EMERGENCY_SCHEMA_LOCK = None
+
 def ensure_emergency_table(conn):
-    with conn.cursor() as c: c.execute(EMERGENCY_TABLE_SQL)
-    conn.commit()
+    global _EMERGENCY_SCHEMA_READY, _EMERGENCY_SCHEMA_LOCK
+    import threading
+    if _EMERGENCY_SCHEMA_READY:
+        return
+    if _EMERGENCY_SCHEMA_LOCK is None:
+        _EMERGENCY_SCHEMA_LOCK = threading.Lock()
+    with _EMERGENCY_SCHEMA_LOCK:
+        if _EMERGENCY_SCHEMA_READY:
+            return
+        with conn.cursor() as cursor:
+            cursor.execute(EMERGENCY_TABLE_SQL)
+            cursor.execute("""
+                SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA=%s AND TABLE_NAME='emergency_requests'
+            """, (DB_NAME,))
+            existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
+            migrations = {
+                'ambulance_id': "ALTER TABLE emergency_requests ADD COLUMN ambulance_id VARCHAR(64) NULL",
+                'current_junction': "ALTER TABLE emergency_requests ADD COLUMN current_junction INT NULL",
+                'destination': "ALTER TABLE emergency_requests ADD COLUMN destination INT NULL",
+                'emergency_level': "ALTER TABLE emergency_requests ADD COLUMN emergency_level VARCHAR(20) NULL",
+                'route_json': "ALTER TABLE emergency_requests ADD COLUMN route_json TEXT NULL",
+                'route_cost_seconds': "ALTER TABLE emergency_requests ADD COLUMN route_cost_seconds DOUBLE NOT NULL DEFAULT 0",
+                'route_index': "ALTER TABLE emergency_requests ADD COLUMN route_index INT NOT NULL DEFAULT 0",
+                'segment_seconds': "ALTER TABLE emergency_requests ADD COLUMN segment_seconds DOUBLE NOT NULL DEFAULT 0",
+                'segment_started_at': "ALTER TABLE emergency_requests ADD COLUMN segment_started_at DATETIME NULL",
+                'status': "ALTER TABLE emergency_requests ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'CLEARED'",
+                'started_at': "ALTER TABLE emergency_requests ADD COLUMN started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                'updated_at': "ALTER TABLE emergency_requests ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            }
+            for name, sql in migrations.items():
+                if name not in existing:
+                    cursor.execute(sql)
+            # Backfill any NULL route indexes/timing values in old rows.
+            cursor.execute("UPDATE emergency_requests SET route_index=0 WHERE route_index IS NULL")
+            cursor.execute("UPDATE emergency_requests SET segment_seconds=0 WHERE segment_seconds IS NULL")
+        conn.commit()
+        _EMERGENCY_SCHEMA_READY = True
 
 def db_now(): return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
