@@ -519,6 +519,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let networkState = null;
     let networkAnim = null;
     let networkTimer = null;
+    let emergencyPollTimer = null;
     let frameTimer = null;
     let replayFrame = 0;
     let replayRunning = true;
@@ -535,7 +536,9 @@ document.addEventListener("DOMContentLoaded", () => {
         junctionLocks: new Map(),
         phaseClock: new Map(),
         lastDbFrame: -1,
-        lastEmergencyKey: ""
+        lastEmergencyKey: "",
+        laneOrder: new Map(),
+        lastDrawAt: 0
     };
 
     const corridors = [
@@ -663,14 +666,14 @@ document.addEventListener("DOMContentLoaded", () => {
         // pressure remains the database observation.
         const scale = 18;
         return {
-            TOP_E: clamp(Math.round(average(demand(1,"East"),demand(2,"East"))/scale),1,14),
-            TOP_W: clamp(Math.round(average(demand(2,"West"),demand(1,"West"))/scale),1,14),
-            BOT_E: clamp(Math.round(average(demand(3,"East"),demand(4,"East"))/scale),1,14),
-            BOT_W: clamp(Math.round(average(demand(4,"West"),demand(3,"West"))/scale),1,14),
-            LEFT_S: clamp(Math.round(average(demand(1,"South"),demand(3,"South"))/scale),1,14),
-            LEFT_N: clamp(Math.round(average(demand(3,"North"),demand(1,"North"))/scale),1,14),
-            RIGHT_S: clamp(Math.round(average(demand(2,"South"),demand(4,"South"))/scale),1,14),
-            RIGHT_N: clamp(Math.round(average(demand(4,"North"),demand(2,"North"))/scale),1,14)
+            TOP_E: clamp(Math.round(average(demand(1,"East"),demand(2,"East"))/scale),1,10),
+            TOP_W: clamp(Math.round(average(demand(2,"West"),demand(1,"West"))/scale),1,10),
+            BOT_E: clamp(Math.round(average(demand(3,"East"),demand(4,"East"))/scale),1,10),
+            BOT_W: clamp(Math.round(average(demand(4,"West"),demand(3,"West"))/scale),1,10),
+            LEFT_S: clamp(Math.round(average(demand(1,"South"),demand(3,"South"))/scale),1,10),
+            LEFT_N: clamp(Math.round(average(demand(3,"North"),demand(1,"North"))/scale),1,10),
+            RIGHT_S: clamp(Math.round(average(demand(2,"South"),demand(4,"South"))/scale),1,10),
+            RIGHT_N: clamp(Math.round(average(demand(4,"North"),demand(2,"North"))/scale),1,10)
         };
     }
 
@@ -767,6 +770,10 @@ document.addEventListener("DOMContentLoaded", () => {
         rebuildCorridors();
         const targets=corridorTargets();
 
+        if(sim.lastDbFrame!==Number(networkState.frame_index||0)) {
+            sim.junctionLocks.clear();
+            sim.lastDrawAt=0;
+        }
         for(const c of corridors){
             const existing=[...sim.vehicles.values()].filter(v=>v.corridor===c.id);
             const target=targets[c.id]||0;
@@ -812,13 +819,10 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
 
-        // Following-distance control on the same lane/corridor.
-        let leader=null;
-        for(const other of sim.vehicles.values()){
-            if(other===v || other.corridor!==v.corridor) continue;
-            if(other.s>v.s && (!leader || other.s<leader.s)) leader=other;
-        }
-        if(leader){
+        // Following-distance control. leaderRef is prepared once per paint
+        // cycle instead of scanning every vehicle for every vehicle (O(n^2)).
+        const leader=v.leaderRef;
+        if(leader && leader.active){
             const gap=leader.s-v.s;
             const minGap=30;
             if(gap<minGap) targetSpeed=0;
@@ -1033,9 +1037,24 @@ document.addEventListener("DOMContentLoaded", () => {
         if(sim.lastDbFrame!==targetFrame) reconcilePopulation();
 
         // Update every individual vehicle with real signal/spacing constraints.
-        const dt=Math.min(.05,Math.max(.001,(now-lastNetworkWall)/1000));
+        // Build lane leaders once per frame to keep the browser responsive.
+        sim.laneOrder.clear();
+        for(const v of sim.vehicles.values()){
+            const list=sim.laneOrder.get(v.corridor)||[];
+            list.push(v);
+            sim.laneOrder.set(v.corridor,list);
+        }
+        for(const list of sim.laneOrder.values()){
+            list.sort((a,b)=>b.s-a.s);
+            for(let i=0;i<list.length;i++) list[i].leaderRef=list[i-1]||null;
+        }
+        const dt=Math.min(.06,Math.max(.01,(now-lastNetworkWall)/1000));
         for(const v of sim.vehicles.values()) updateVehicle(v,dt);
         purgeExited();
+        // Drop locks that belong to vehicles removed/replaced by a new DB frame.
+        for(const [j,id] of sim.junctionLocks.entries()){
+            if(!sim.vehicles.has(id)) sim.junctionLocks.delete(j);
+        }
 
         for(const v of sim.vehicles.values()) drawCar(ctx,v);
         drawEmergencyRoute(ctx,networkState.emergency);
@@ -1049,8 +1068,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function networkLoop(now){
         if(!lastNetworkWall)lastNetworkWall=now;
-        drawNetwork(now);
-        lastNetworkWall=now;
+        if(now-sim.lastDrawAt>=32){
+            drawNetwork(now);
+            sim.lastDrawAt=now;
+            lastNetworkWall=now;
+        }
         networkAnim=requestAnimationFrame(networkLoop);
     }
 
@@ -1060,6 +1082,20 @@ document.addEventListener("DOMContentLoaded", () => {
         rebuildCorridors();
         if(!networkAnim)networkAnim=requestAnimationFrame(networkLoop);
         if(!networkTimer){refreshNetworkState();networkTimer=true;}
+        if(!emergencyPollTimer){
+            emergencyPollTimer=setInterval(async()=>{
+                try{
+                    const res=await fetch(`/api/emergency/status?frame=${replayFrame}`,{cache:"no-store"});
+                    const e=await res.json();
+                    if(e && e.active!==undefined){
+                        const prev=networkState?.emergency?.request_id;
+                        networkState.emergency=e;
+                        renderNetworkDashboard(networkState);
+                        if(prev!==e.request_id) reconcilePopulation();
+                    }
+                }catch(err){console.warn("Emergency status poll failed",err);}
+            },1000);
+        }
         scheduleFrameReplay();
     }
 
