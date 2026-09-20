@@ -290,7 +290,7 @@ def optimize_signals():
         return jsonify({
             "status": "success",
             "junction_id": junction_id,
-            "algorithm": "A* Search + CSP Multi-Agent",
+            "algorithm": "Constraint-Based Multi-Agent Signal Timing",
             "cycle_time": SYSTEM_SETTINGS["cycle_time"],
             "improvement": improvement,
             "optimized_waiting_time": opt_delay,
@@ -349,47 +349,36 @@ def get_reports():
 
 
 # -----------------------------------------------------------------------------
-# Database-driven live network simulation + software-only ambulance priority
+# REALISTIC DATABASE-REPLAYED NETWORK DIGITAL TWIN + EMERGENCY CORRIDOR
 # -----------------------------------------------------------------------------
-# Important project limitation: traffic_data does not contain lane-direction,
-# origin/destination or GPS fields. The live UI therefore uses the stored
-# vehicle_count / speed / occupancy / flow / waiting values as the measured
-# junction state, and deterministically derives four approach demands from that
-# row for visualization. It does not claim these direction values are measured.
+# The existing traffic_data table contains aggregate observations only:
+# vehicle_count, average_speed, lane_occupancy, flow_rate, time_of_day,
+# waiting_time. There are no measured lane-direction/GPS fields. The control
+# center therefore replays one row per junction per frame and derives an
+# *estimated* four-approach demand for the visualization. This is deliberately
+# labelled as estimated rather than sensor-measured direction data.
 
-EMERGENCY_STATE = {
-    "active": False,
-    "request_id": None,
-    "ambulance_id": None,
-    "current_junction": None,
-    "destination": None,
-    "emergency_level": "CRITICAL",
-    "route": [],
-    "route_index": 0,
-    "status": "NORMAL",
-    "started_at": None,
-}
-
-JUNCTION_COORDS = {
-    1: (0, 0),
-    2: (1, 0),
-    3: (0, 1),
-    4: (1, 1),
-}
-
-ROAD_GRAPH = {
-    1: {2: 90, 3: 70},
-    2: {1: 90, 4: 80, 3: 75},
-    3: {1: 70, 4: 65, 2: 75},
-    4: {2: 80, 3: 65},
-}
+from datetime import datetime, timezone
+import heapq
 
 DIRECTIONS = ["North", "South", "East", "West"]
-DIRECTION_FACTORS = {
-    1: [1.22, 0.96, 1.05, 0.77],
-    2: [1.02, 1.18, 1.00, 0.88],
-    3: [0.90, 0.82, 1.20, 1.08],
-    4: [1.00, 1.10, 0.95, 1.12],
+NETWORK_COORDS = {
+    1: (0, 0), 2: (1, 0),
+    3: (0, 1), 4: (1, 1),
+}
+NETWORK_GRAPH = {
+    1: {2: 36.0, 3: 40.0},
+    2: {1: 36.0, 4: 38.0},
+    3: {1: 40.0, 4: 35.0},
+    4: {2: 38.0, 3: 35.0},
+}
+# Deterministic approach factors are only used to split aggregate junction data
+# into four visual approach queues. They are not claimed as measured directions.
+APPROACH_FACTORS = {
+    1: {"North": 1.22, "South": 0.94, "East": 1.05, "West": 0.79},
+    2: {"North": 1.03, "South": 1.17, "East": 0.98, "West": 0.88},
+    3: {"North": 0.91, "South": 0.83, "East": 1.18, "West": 1.08},
+    4: {"North": 1.00, "South": 1.09, "East": 0.96, "West": 1.12},
 }
 
 EMERGENCY_TABLE_SQL = """
@@ -402,6 +391,8 @@ CREATE TABLE IF NOT EXISTS emergency_requests (
     route_json TEXT NOT NULL,
     route_cost_seconds DOUBLE NOT NULL DEFAULT 0,
     route_index INT NOT NULL DEFAULT 0,
+    segment_seconds DOUBLE NOT NULL DEFAULT 0,
+    segment_started_at DATETIME NOT NULL,
     status VARCHAR(32) NOT NULL,
     started_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
@@ -411,251 +402,30 @@ CREATE TABLE IF NOT EXISTS emergency_requests (
 """
 
 
-def _ensure_emergency_table(conn):
+def ensure_emergency_table(conn):
     with conn.cursor() as cursor:
         cursor.execute(EMERGENCY_TABLE_SQL)
     conn.commit()
 
 
-def _utc_mysql_now():
-    # MySQL DATETIME; application server and database timestamps remain simple
-    # and do not require timezone-aware SQL functions.
-    from datetime import datetime
+def db_now():
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _junction_congestion():
-    """Compute a deterministic 0-100 congestion score from current database rows."""
-    scores = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+def _fetch_network_frame(frame_index):
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT COUNT(*) AS total FROM traffic_data")
             total = int(cursor.fetchone()["total"] or 0)
-            if total <= 0:
-                return scores
+            if total < 4:
+                raise RuntimeError("traffic_data must contain at least 4 records so the four-junction replay can start.")
             chunk = max(1, total // 4)
+            frame_count = chunk
+            frame_index = int(frame_index) % frame_count
+            junction_rows = {}
             for jid in range(1, 5):
-                offset = (jid - 1) * chunk
-                limit = chunk if jid < 4 else total - offset
-                limit = max(1, limit)
-                cursor.execute(f"""
-                    SELECT
-                        COALESCE(AVG(vehicle_count), 0) AS vehicles,
-                        COALESCE(AVG(lane_occupancy), 0) AS occupancy,
-                        COALESCE(AVG(waiting_time), 0) AS waiting
-                    FROM (
-                        SELECT vehicle_count, lane_occupancy, waiting_time
-                        FROM traffic_data
-                        ORDER BY id ASC
-                        LIMIT {limit} OFFSET {offset}
-                    ) AS j_chunk
-                """)
-                row = cursor.fetchone() or {}
-                score = (
-                    min(float(row.get("vehicles") or 0) / 2.0, 50.0)
-                    + min(float(row.get("occupancy") or 0) * 0.35, 35.0)
-                    + min(float(row.get("waiting") or 0) * 0.5, 15.0)
-                )
-                scores[jid] = round(min(score, 100.0), 1)
-    finally:
-        conn.close()
-    return scores
-
-
-def _latest_emergency_from_db():
-    conn = get_db_connection()
-    try:
-        _ensure_emergency_table(conn)
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT id, ambulance_id, current_junction, destination, emergency_level,
-                       route_json, route_cost_seconds, route_index, status, started_at
-                FROM emergency_requests
-                WHERE status IN ('ACTIVE', 'AT DESTINATION')
-                ORDER BY id DESC
-                LIMIT 1
-            """)
-            row = cursor.fetchone()
-        if not row:
-            return None
-        state = {
-            "active": row["status"] in ("ACTIVE", "AT DESTINATION"),
-            "request_id": int(row["id"]),
-            "ambulance_id": row["ambulance_id"],
-            "current_junction": int(row["current_junction"]),
-            "destination": int(row["destination"]),
-            "emergency_level": row["emergency_level"],
-            "route": json.loads(row["route_json"] or "[]"),
-            "route_index": int(row["route_index"]),
-            "status": row["status"],
-            "started_at": str(row["started_at"]),
-        }
-        EMERGENCY_STATE.update(state)
-        return state
-    finally:
-        conn.close()
-
-
-def _set_emergency_db_row(request_id, route_index, current_junction, status):
-    conn = get_db_connection()
-    try:
-        _ensure_emergency_table(conn)
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                UPDATE emergency_requests
-                SET route_index=%s, current_junction=%s, status=%s, updated_at=%s
-                WHERE id=%s
-            """, (int(route_index), int(current_junction), status, _utc_mysql_now(), int(request_id)))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _astar_route(start, goal, congestion):
-    """Actual A* over the explicit four-junction graph."""
-    import heapq
-    start, goal = int(start), int(goal)
-    if start == goal:
-        return [start], 0.0
-
-    def heuristic(node):
-        x1, y1 = JUNCTION_COORDS[node]
-        x2, y2 = JUNCTION_COORDS[goal]
-        # Base edge times are in the same scale as the heuristic.
-        return math.hypot(x2 - x1, y2 - y1) * 65.0
-
-    open_heap = [(heuristic(start), 0.0, start)]
-    came_from = {}
-    g_score = {start: 0.0}
-    while open_heap:
-        _, current_cost, current = heapq.heappop(open_heap)
-        if current == goal:
-            route = [current]
-            while current in came_from:
-                current = came_from[current]
-                route.append(current)
-            route.reverse()
-            return route, round(current_cost, 1)
-        if current_cost > g_score.get(current, float("inf")):
-            continue
-        for neighbor, base_time in ROAD_GRAPH.get(current, {}).items():
-            edge_cost = float(base_time) * (1.0 + float(congestion.get(neighbor, 0.0)) / 200.0)
-            tentative = current_cost + edge_cost
-            if tentative < g_score.get(neighbor, float("inf")):
-                came_from[neighbor] = current
-                g_score[neighbor] = tentative
-                heapq.heappush(open_heap, (tentative + heuristic(neighbor), tentative, neighbor))
-    return [], 0.0
-
-
-def _edge_time_seconds(a, b, congestion):
-    base = ROAD_GRAPH.get(int(a), {}).get(int(b))
-    if base is None:
-        base = ROAD_GRAPH.get(int(b), {}).get(int(a))
-    if base is None:
-        return 0.0
-    return round(float(base) * (1.0 + float(congestion.get(int(b), 0.0)) / 200.0), 1)
-
-
-def _route_remaining_eta(route, route_index, congestion):
-    if not route or route_index >= len(route) - 1:
-        return 0.0
-    eta = 0.0
-    for i in range(int(route_index), len(route) - 1):
-        eta += _edge_time_seconds(route[i], route[i + 1], congestion)
-    return round(eta, 1)
-
-
-def _get_signal_plan_for_row(jid, row):
-    avg_v = float(row.get("vehicle_count") or 0)
-    avg_occ = float(row.get("lane_occupancy") or 0)
-    avg_wait = float(row.get("waiting_time") or 0)
-    base_demand = (avg_v * 0.5) + (avg_occ * 0.3) + (avg_wait * 0.2)
-    factors = DIRECTION_FACTORS.get(int(jid), [1.0, 1.0, 1.0, 1.0])
-    demands = {d: base_demand * factors[i] for i, d in enumerate(DIRECTIONS)}
-    plan, _, _ = run_astar_csp(
-        demands,
-        SYSTEM_SETTINGS["min_green"],
-        SYSTEM_SETTINGS["max_green"],
-        SYSTEM_SETTINGS["yellow_time"],
-        SYSTEM_SETTINGS["cycle_time"]
-    )
-    return plan
-
-
-def _signal_state(plan, now_epoch, phase_offset=0.0):
-    cycle = sum(int(plan[d]["green"]) + int(plan[d]["yellow"]) for d in DIRECTIONS)
-    cycle = max(1, cycle)
-    t = (now_epoch + phase_offset) % cycle
-    elapsed = 0
-    result = {d: {"state": "RED", "remaining_seconds": 0, "phase_elapsed": 0} for d in DIRECTIONS}
-    for d in DIRECTIONS:
-        green = int(plan[d]["green"])
-        yellow = int(plan[d]["yellow"])
-        if t < elapsed + green:
-            result[d] = {"state": "GREEN", "remaining_seconds": round(elapsed + green - t, 1), "phase_elapsed": round(t - elapsed, 1)}
-            return result
-        elapsed += green
-        if t < elapsed + yellow:
-            result[d] = {"state": "YELLOW", "remaining_seconds": round(elapsed + yellow - t, 1), "phase_elapsed": round(t - elapsed, 1)}
-            return result
-        elapsed += yellow
-    return result
-
-
-def _derive_approach_data(jid, row, signal_plan, now_epoch):
-    vehicle_count = max(0.0, float(row.get("vehicle_count") or 0))
-    speed = max(1.0, float(row.get("average_speed") or 1.0))
-    occupancy = max(0.0, min(100.0, float(row.get("lane_occupancy") or 0)))
-    flow = max(0.0, float(row.get("flow_rate") or 0))
-    wait = max(0.0, float(row.get("waiting_time") or 0))
-    pressure = (0.55 + 0.45 * occupancy / 100.0) * (0.7 + 0.3 * min(flow / 1500.0, 1.4)) * (1.0 + min(wait, 120.0) / 240.0)
-    factors = DIRECTION_FACTORS.get(int(jid), [1.0] * 4)
-    raw = [vehicle_count * pressure * f / sum(factors) * 1.35 for f in factors]
-    estimated = {d: round(raw[i], 1) for i, d in enumerate(DIRECTIONS)}
-    signals = _signal_state(signal_plan, now_epoch, phase_offset=int(jid) * 11.0)
-
-    result = {}
-    for d in DIRECTIONS:
-        count = max(0, int(round(estimated[d])))
-        visible = min(10, max(1 if count > 0 else 0, int(round(count / 3.0))))
-        result[d] = {
-            "estimated_vehicles": count,
-            "visible_vehicles": visible,
-            "speed_kmh": round(speed, 1),
-            "occupancy": round(occupancy, 1),
-            "flow_rate": round(flow, 1),
-            "waiting_time": round(wait, 1),
-            "signal": signals[d]["state"],
-            "signal_remaining": signals[d]["remaining_seconds"],
-            "phase_elapsed": signals[d]["phase_elapsed"],
-        }
-    return result
-
-
-def _network_scenario(tick=None):
-    if tick is None:
-        tick = int(time.time() // 5)
-    tick = int(tick)
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) AS total FROM traffic_data")
-            total = int(cursor.fetchone()["total"] or 0)
-            if total <= 0:
-                raise RuntimeError("traffic_data is empty")
-            chunk = max(1, total // 4)
-            now_epoch = time.time()
-            junctions = {}
-            total_vehicles = 0
-            weighted_wait = 0.0
-            weighted_speed = 0.0
-            for jid in range(1, 5):
-                offset_base = (jid - 1) * chunk
-                available = chunk if jid < 4 else total - offset_base
-                idx = (tick + (jid - 1) * 37) % max(1, available)
-                offset = offset_base + idx
+                offset = (jid - 1) * chunk + frame_index
                 cursor.execute("""
                     SELECT id, vehicle_count, average_speed, lane_occupancy,
                            flow_rate, time_of_day, waiting_time
@@ -664,249 +434,509 @@ def _network_scenario(tick=None):
                     LIMIT 1 OFFSET %s
                 """, (offset,))
                 row = cursor.fetchone()
-                if not row:
-                    raise RuntimeError(f"No traffic_data row available for Junction {jid}")
-                plan = _get_signal_plan_for_row(jid, row)
-                approaches = _derive_approach_data(jid, row, plan, now_epoch)
-                junctions[str(jid)] = {
-                    "junction": jid,
-                    "record_id": int(row["id"]),
-                    "vehicle_count": int(row["vehicle_count"] or 0),
-                    "average_speed": round(float(row["average_speed"] or 0), 1),
-                    "lane_occupancy": round(float(row["lane_occupancy"] or 0), 1),
-                    "flow_rate": round(float(row["flow_rate"] or 0), 1),
-                    "time_of_day": row["time_of_day"] or "unknown",
-                    "waiting_time": round(float(row["waiting_time"] or 0), 1),
-                    "signals": plan,
-                    "approaches": approaches,
+                if row is None:
+                    # Defensive fallback for an uneven final chunk.
+                    cursor.execute("""
+                        SELECT id, vehicle_count, average_speed, lane_occupancy,
+                               flow_rate, time_of_day, waiting_time
+                        FROM traffic_data
+                        ORDER BY id DESC
+                        LIMIT 1
+                    """)
+                    row = cursor.fetchone()
+                junction_rows[jid] = {
+                    "source_id": int(row["id"]),
+                    "vehicle_count": max(0, int(row["vehicle_count"] or 0)),
+                    "average_speed": max(0.0, float(row["average_speed"] or 0)),
+                    "lane_occupancy": max(0.0, min(100.0, float(row["lane_occupancy"] or 0))),
+                    "flow_rate": max(0.0, float(row["flow_rate"] or 0)),
+                    "time_of_day": str(row["time_of_day"] or ""),
+                    "waiting_time": max(0.0, float(row["waiting_time"] or 0)),
                 }
-                total_vehicles += int(row["vehicle_count"] or 0)
-                weighted_wait += float(row["waiting_time"] or 0)
-                weighted_speed += float(row["average_speed"] or 0)
-            return {
-                "status": "success",
-                "server_time": now_epoch,
-                "tick": tick,
-                "frame_seconds": 5,
-                "junctions": junctions,
-                "total_database_vehicles": total_vehicles,
-                "network_avg_waiting": round(weighted_wait / 4.0, 1),
-                "network_avg_speed": round(weighted_speed / 4.0, 1),
-                "source": "Aiven MySQL traffic_data replay",
-            }
+            return frame_index, frame_count, junction_rows
     finally:
         conn.close()
 
 
-def _emergency_status(congestion=None):
-    if congestion is None:
-        congestion = _junction_congestion()
-    statuses = {}
-    route = EMERGENCY_STATE["route"]
-    idx = int(EMERGENCY_STATE["route_index"] or 0)
-    for jid in range(1, 5):
-        if not EMERGENCY_STATE["active"]:
-            statuses[jid] = "NORMAL"
-        elif route and jid == route[min(idx, len(route) - 1)]:
-            statuses[jid] = "ACTIVE"
-        elif route and jid in route[min(idx + 1, len(route)):]:
-            statuses[jid] = "PREPARING"
+def _congestion_score(row):
+    # Transparent weighted indicator from the available aggregate metrics.
+    vehicle_component = min(100.0, row["vehicle_count"] / 1.5)
+    wait_component = min(100.0, row["waiting_time"] / 1.2)
+    occupancy_component = row["lane_occupancy"]
+    speed_component = max(0.0, min(100.0, 100.0 - row["average_speed"] * 2.2))
+    score = (
+        0.30 * vehicle_component
+        + 0.28 * occupancy_component
+        + 0.25 * wait_component
+        + 0.17 * speed_component
+    )
+    return round(max(0.0, min(100.0, score)), 1)
+
+
+def _approach_demand(jid, row):
+    base = (
+        max(0.0, row["vehicle_count"]) * 0.46
+        + max(0.0, row["flow_rate"]) * 0.025
+        + max(0.0, row["waiting_time"]) * 0.38
+        + max(0.0, row["lane_occupancy"]) * 0.25
+    )
+    return {
+        d: round(base * APPROACH_FACTORS[jid][d], 2)
+        for d in DIRECTIONS
+    }
+
+
+def _fit_green_pair(ns, ew, min_green, max_green, total_green):
+    ns = max(min_green, min(max_green, ns))
+    ew = max(min_green, min(max_green, ew))
+    target = float(total_green)
+    for _ in range(100):
+        diff = target - (ns + ew)
+        if abs(diff) < 0.01:
+            break
+        if diff > 0:
+            room_ns = max_green - ns
+            room_ew = max_green - ew
+            if room_ns <= 0 and room_ew <= 0:
+                break
+            if room_ns >= room_ew and room_ns > 0:
+                add = min(diff, room_ns)
+                ns += add
+            elif room_ew > 0:
+                add = min(diff, room_ew)
+                ew += add
         else:
-            statuses[jid] = "NORMAL"
-    return statuses
+            removable_ns = ns - min_green
+            removable_ew = ew - min_green
+            if removable_ns <= 0 and removable_ew <= 0:
+                break
+            if removable_ns >= removable_ew and removable_ns > 0:
+                sub = min(-diff, removable_ns)
+                ns -= sub
+            elif removable_ew > 0:
+                sub = min(-diff, removable_ew)
+                ew -= sub
+    return int(round(ns)), int(round(ew))
 
 
-def _emergency_payload():
-    congestion = _junction_congestion()
-    state = _latest_emergency_from_db() or EMERGENCY_STATE
-    if state.get("active") and state.get("status") == "AT DESTINATION":
-        statuses = _emergency_status(congestion)
+def _normal_signal_plan(jid, row, replay_seconds):
+    demands = _approach_demand(jid, row)
+    ns_pressure = demands["North"] + demands["South"]
+    ew_pressure = demands["East"] + demands["West"]
+    cycle = max(40, int(SYSTEM_SETTINGS["cycle_time"]))
+    yellow = max(3, int(SYSTEM_SETTINGS["yellow_time"]))
+    min_g = max(5, int(SYSTEM_SETTINGS["min_green"]))
+    max_g = max(min_g, int(SYSTEM_SETTINGS["max_green"]))
+    total_green = max(2 * min_g, cycle - 2 * yellow)
+
+    total_pressure = ns_pressure + ew_pressure or 1.0
+    ns_target = total_green * (ns_pressure / total_pressure)
+    ew_target = total_green - ns_target
+    g_ns, g_ew = _fit_green_pair(ns_target, ew_target, min_g, max_g, total_green)
+
+    offset = (jid - 1) * 6
+    t = (float(replay_seconds) + offset) % cycle
+    if t < g_ns:
+        phase = "NS_GREEN"
+        rem = g_ns - t
+    elif t < g_ns + yellow:
+        phase = "NS_YELLOW"
+        rem = g_ns + yellow - t
+    elif t < g_ns + yellow + g_ew:
+        phase = "EW_GREEN"
+        rem = g_ns + yellow + g_ew - t
     else:
-        statuses = _emergency_status(congestion)
-    route = state.get("route") or []
-    idx = int(state.get("route_index") or 0)
-    next_junction = route[idx + 1] if state.get("active") and idx + 1 < len(route) else None
-    segment_time = 0.0
-    if next_junction is not None:
-        segment_time = _edge_time_seconds(state["current_junction"], next_junction, congestion)
-    eta = _route_remaining_eta(route, idx, congestion)
+        phase = "EW_YELLOW"
+        rem = cycle - t
+
+    signals = {
+        "North": "GREEN" if phase == "NS_GREEN" else ("YELLOW" if phase == "NS_YELLOW" else "RED"),
+        "South": "GREEN" if phase == "NS_GREEN" else ("YELLOW" if phase == "NS_YELLOW" else "RED"),
+        "East": "GREEN" if phase == "EW_GREEN" else ("YELLOW" if phase == "EW_YELLOW" else "RED"),
+        "West": "GREEN" if phase == "EW_GREEN" else ("YELLOW" if phase == "EW_YELLOW" else "RED"),
+    }
+    return {
+        "phase": phase,
+        "phase_remaining": round(max(0.0, rem), 1),
+        "signals": signals,
+        "green_ns": g_ns,
+        "green_ew": g_ew,
+        "yellow": yellow,
+        "cycle": cycle,
+        "demands": demands,
+        "controller": "adaptive-demand",
+    }
+
+
+def _edge_direction(a, b):
+    ax, ay = NETWORK_COORDS[int(a)]
+    bx, by = NETWORK_COORDS[int(b)]
+    if bx > ax: return "East"
+    if bx < ax: return "West"
+    if by > ay: return "South"
+    return "North"
+
+
+def _edge_cost(a, b, congestion, rows):
+    base = float(NETWORK_GRAPH[int(a)][int(b)])
+    return base + congestion[int(b)] * 0.70 + rows[int(b)]["waiting_time"] * 0.55 + congestion[int(a)] * 0.15
+
+
+def astar_route(start, goal, congestion, rows):
+    start, goal = int(start), int(goal)
+    if start == goal:
+        return [start], 0.0, []
+
+    def h(n):
+        x1, y1 = NETWORK_COORDS[n]
+        x2, y2 = NETWORK_COORDS[goal]
+        return (abs(x1 - x2) + abs(y1 - y2)) * 33.0
+
+    pq = [(h(start), 0.0, start)]
+    came = {}
+    gscore = {start: 0.0}
+    seen = set()
+    while pq:
+        _, g, node = heapq.heappop(pq)
+        if node in seen:
+            continue
+        seen.add(node)
+        if node == goal:
+            break
+        for nxt in NETWORK_GRAPH[node]:
+            ng = g + _edge_cost(node, nxt, congestion, rows)
+            if ng < gscore.get(nxt, float("inf")):
+                gscore[nxt] = ng
+                came[nxt] = node
+                heapq.heappush(pq, (ng + h(nxt), ng, nxt))
+
+    if goal not in gscore:
+        raise RuntimeError("No route exists between the selected junctions.")
+
+    path = [goal]
+    while path[-1] != start:
+        path.append(came[path[-1]])
+    path.reverse()
+    segments = []
+    for a, b in zip(path, path[1:]):
+        segments.append({
+            "from": int(a),
+            "to": int(b),
+            "direction": _edge_direction(a, b),
+            "seconds": round(_edge_cost(a, b, congestion, rows), 1),
+            "congestion_at_destination": congestion[int(b)],
+        })
+    return path, round(float(gscore[goal]), 1), segments
+
+
+def _latest_emergency():
+    conn = get_db_connection()
+    try:
+        ensure_emergency_table(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM emergency_requests
+                WHERE status IN ('ACTIVE', 'AT DESTINATION')
+                ORDER BY id DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return row
+    finally:
+        conn.close()
+
+
+def _emergency_state(rows, replay_seconds):
+    conn = get_db_connection()
+    try:
+        ensure_emergency_table(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM emergency_requests
+                WHERE status IN ('ACTIVE', 'AT DESTINATION')
+                ORDER BY id DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+        if not row:
+            return {"active": False, "status": "NORMAL", "route": [], "route_index": 0}
+
+        route = [int(x) for x in json.loads(row["route_json"] or "[]")]
+        idx = int(row["route_index"] or 0)
+        congestion = {j: _congestion_score(rows[j]) for j in range(1, 5)}
+        seg_seconds = float(row["segment_seconds"] or 0)
+        progress = 1.0
+        if row["status"] == "ACTIVE" and idx < len(route) - 1 and seg_seconds > 0:
+            try:
+                started = datetime.strptime(str(row["segment_started_at"]), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                elapsed = max(0.0, datetime.now(timezone.utc).timestamp() - started.timestamp())
+                progress = min(0.99, elapsed / seg_seconds)
+            except Exception:
+                progress = 0.0
+
+        next_j = route[idx + 1] if idx + 1 < len(route) else None
+        eta = 0.0
+        if idx < len(route) - 1:
+            for a, b in zip(route[idx:], route[idx + 1:]):
+                eta += _edge_cost(a, b, congestion, rows)
+
+        return {
+            "active": True,
+            "request_id": int(row["id"]),
+            "ambulance_id": row["ambulance_id"],
+            "current_junction": int(row["current_junction"]),
+            "destination": int(row["destination"]),
+            "emergency_level": row["emergency_level"],
+            "route": route,
+            "route_index": idx,
+            "next_junction": next_j,
+            "status": row["status"],
+            "segment_seconds": round(seg_seconds, 1),
+            "segment_progress": round(progress, 3),
+            "estimated_time_seconds": round(eta, 1),
+            "source": "emergency_requests",
+        }
+    finally:
+        conn.close()
+
+
+def _network_payload(frame_index=0):
+    frame_index, frame_count, rows = _fetch_network_frame(frame_index)
+    replay_seconds = frame_index * 5
+    congestion = {j: _congestion_score(rows[j]) for j in range(1, 5)}
+    emergency = _emergency_state(rows, replay_seconds)
+
+    junctions = {}
+    for j in range(1, 5):
+        plan = _normal_signal_plan(j, rows[j], replay_seconds)
+        status = "NORMAL"
+        if emergency.get("active"):
+            route = emergency.get("route", [])
+            idx = emergency.get("route_index", 0)
+            if j in route:
+                if j == emergency.get("destination"):
+                    status = "DESTINATION"
+                elif j == route[idx]:
+                    status = "EMERGENCY ACTIVE"
+                    if idx + 1 < len(route):
+                        travel_dir = _edge_direction(j, route[idx + 1])
+                        # Keep the real signal semantics (red/yellow/green),
+                        # while the corridor status is a separate layer.
+                        if plan["phase"] in ("NS_GREEN", "NS_YELLOW") and travel_dir in ("North", "South"):
+                            pass
+                        elif plan["phase"] in ("EW_GREEN", "EW_YELLOW") and travel_dir in ("East", "West"):
+                            pass
+                        else:
+                            plan["phase"] = "EMERGENCY_HOLD"
+                            plan["phase_remaining"] = 0.0
+                            plan["signals"] = {d: ("GREEN" if d == travel_dir else "RED") for d in DIRECTIONS}
+                            plan["controller"] = "emergency-priority"
+                elif idx + 1 < len(route) and j == route[idx + 1]:
+                    status = "PREPARING"
+                    plan["controller"] = "corridor-preparing"
+        plan["status"] = status
+        junctions[j] = {
+            **rows[j],
+            "junction": j,
+            "congestion": congestion[j],
+            "approach_demand": _approach_demand(j, rows[j]),
+            "signal": plan,
+        }
+
+    total_vehicles = sum(rows[j]["vehicle_count"] for j in rows)
+    avg_wait = sum(rows[j]["waiting_time"] for j in rows) / 4.0
+    avg_speed = sum(rows[j]["average_speed"] for j in rows) / 4.0
     return {
         "status": "success",
-        "emergency": state,
+        "frame_index": frame_index,
+        "frame_count": frame_count,
+        "replay_seconds": replay_seconds,
+        "junctions": junctions,
         "congestion": congestion,
-        "junction_status": statuses,
-        "estimated_time_seconds": eta,
-        "next_junction": next_junction,
-        "segment_time_seconds": segment_time,
+        "total_database_vehicles": total_vehicles,
+        "network_average_wait": round(avg_wait, 1),
+        "network_average_speed": round(avg_speed, 1),
+        "emergency": emergency,
+        "data_semantics": "Aggregate database replay; four approach demands are estimated for visualization because traffic_data has no directional fields.",
     }
 
 
 @app.route("/api/network/state")
-def network_state():
+def network_state_api():
     try:
-        tick = request.args.get("tick")
-        scenario = _network_scenario(None if tick is None else int(tick))
-        # Attach emergency info so the canvas and dashboard are synchronized.
-        emergency = _emergency_payload()
-        scenario["emergency"] = emergency["emergency"]
-        scenario["junction_status"] = emergency["junction_status"]
-        scenario["emergency_eta_seconds"] = emergency["estimated_time_seconds"]
-        scenario["emergency_next_junction"] = emergency["next_junction"]
-        scenario["emergency_segment_time_seconds"] = emergency["segment_time_seconds"]
-        return jsonify(scenario)
+        frame = int(request.args.get("frame", request.args.get("tick", 0)))
+        return jsonify(_network_payload(frame))
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Database-driven network state failed: {e}"}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/emergency/plan", methods=["POST"])
-def plan_emergency():
+def emergency_plan():
     try:
-        data = request.json or {}
-        start = int(data.get("current_junction", 1))
-        destination = int(data.get("destination", 4))
-        if start not in ROAD_GRAPH or destination not in ROAD_GRAPH:
-            return jsonify({"status": "error", "message": "Invalid junction selected."}), 400
-        if start == destination:
-            return jsonify({"status": "error", "message": "Current and destination junction cannot be the same."}), 400
-        congestion = _junction_congestion()
-        route, route_cost = _astar_route(start, destination, congestion)
-        if not route:
-            return jsonify({"status": "error", "message": "No route found."}), 400
+        data = request.get_json(silent=True) or {}
+        start = int(data.get("current_junction"))
+        goal = int(data.get("destination"))
+        if start not in NETWORK_GRAPH or goal not in NETWORK_GRAPH:
+            return jsonify({"status": "error", "message": "Junction must be between 1 and 4."}), 400
+        frame = int(data.get("frame", 0))
+        _, _, rows = _fetch_network_frame(frame)
+        congestion = {j: _congestion_score(rows[j]) for j in range(1, 5)}
+        route, cost, segments = astar_route(start, goal, congestion, rows)
         return jsonify({
             "status": "success",
-            "algorithm": "A*",
+            "algorithm": "A* Emergency Route Planning",
             "route": route,
-            "route_cost_seconds": route_cost,
-            "estimated_time_seconds": _route_remaining_eta(route, 0, congestion),
+            "estimated_time_seconds": cost,
+            "segments": segments,
             "congestion": congestion,
+            "frame_index": frame,
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/emergency/activate", methods=["POST"])
-def activate_emergency():
+def emergency_activate():
     try:
-        data = request.json or {}
-        ambulance_id = str(data.get("ambulance_id", "AMB-001")).strip() or "AMB-001"
-        start = int(data.get("current_junction", 1))
-        destination = int(data.get("destination", 4))
+        data = request.get_json(silent=True) or {}
+        ambulance_id = str(data.get("ambulance_id", "AMB-001")).strip()[:64]
+        start = int(data.get("current_junction"))
+        goal = int(data.get("destination"))
         level = str(data.get("emergency_level", "CRITICAL")).upper()
-        if start not in ROAD_GRAPH or destination not in ROAD_GRAPH:
-            return jsonify({"status": "error", "message": "Invalid junction selected."}), 400
-        if start == destination:
-            return jsonify({"status": "error", "message": "Current and destination junction cannot be the same."}), 400
+        if not ambulance_id:
+            return jsonify({"status": "error", "message": "Ambulance ID is required."}), 400
+        if start == goal:
+            return jsonify({"status": "error", "message": "Current junction and destination must be different."}), 400
+        if start not in NETWORK_GRAPH or goal not in NETWORK_GRAPH:
+            return jsonify({"status": "error", "message": "Junction must be between 1 and 4."}), 400
 
-        existing = _latest_emergency_from_db()
-        if existing and existing.get("active"):
-            return jsonify({"status": "error", "message": "An emergency corridor is already active. End it before creating another."}), 409
-
-        congestion = _junction_congestion()
-        route, route_cost = _astar_route(start, destination, congestion)
-        if not route:
-            return jsonify({"status": "error", "message": "No route found."}), 400
-
-        now = _utc_mysql_now()
+        frame = int(data.get("frame", 0))
+        _, _, rows = _fetch_network_frame(frame)
+        congestion = {j: _congestion_score(rows[j]) for j in range(1, 5)}
+        route, cost, segments = astar_route(start, goal, congestion, rows)
+        now = db_now()
+        first_segment = segments[0]["seconds"] if segments else 0
         conn = get_db_connection()
         try:
-            _ensure_emergency_table(conn)
+            ensure_emergency_table(conn)
             with conn.cursor() as cursor:
                 cursor.execute("UPDATE emergency_requests SET status='CLEARED', updated_at=%s WHERE status IN ('ACTIVE','AT DESTINATION')", (now,))
                 cursor.execute("""
                     INSERT INTO emergency_requests
                     (ambulance_id, current_junction, destination, emergency_level,
-                     route_json, route_cost_seconds, route_index, status, started_at, updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,0,'ACTIVE',%s,%s)
-                """, (ambulance_id, start, destination, level, json.dumps(route), route_cost, now, now))
-                request_id = int(cursor.lastrowid)
+                     route_json, route_cost_seconds, route_index, segment_seconds,
+                     segment_started_at, status, started_at, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'ACTIVE',%s,%s)
+                """, (
+                    ambulance_id, start, goal, level, json.dumps(route), cost, 0,
+                    first_segment, now, now, now
+                ))
             conn.commit()
         finally:
             conn.close()
-
-        EMERGENCY_STATE.update({
-            "active": True,
-            "request_id": request_id,
-            "ambulance_id": ambulance_id,
-            "current_junction": start,
-            "destination": destination,
-            "emergency_level": level,
+        return jsonify({
+            "status": "success",
+            "message": "Emergency corridor activated.",
+            "algorithm": "A* Emergency Route Planning",
             "route": route,
-            "route_index": 0,
-            "status": "ACTIVE",
-            "started_at": now,
+            "estimated_time_seconds": cost,
+            "segments": segments,
+            "congestion": congestion,
+            "emergency": _network_payload(frame)["emergency"],
         })
-        payload = _emergency_payload()
-        payload["route_cost_seconds"] = route_cost
-        return jsonify(payload)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/emergency/status")
-def emergency_status():
+def emergency_status_api():
     try:
-        return jsonify(_emergency_payload())
+        frame = int(request.args.get("frame", 0))
+        return jsonify(_network_payload(frame)["emergency"])
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route("/api/emergency/update", methods=["POST"])
-def update_emergency_position():
+@app.route("/api/emergency/advance", methods=["POST"])
+def emergency_advance():
     try:
-        current = _latest_emergency_from_db() or EMERGENCY_STATE
-        if not current.get("active"):
-            return jsonify({"status": "error", "message": "No active emergency."}), 400
-        requested = int((request.json or {}).get("current_junction"))
-        route = [int(x) for x in current.get("route", [])]
-        idx = int(current.get("route_index", 0))
-        expected = route[idx + 1] if idx + 1 < len(route) else None
-        if requested != expected:
-            return jsonify({"status": "error", "message": f"Invalid movement. Expected next junction {expected}."}), 409
-        new_index = idx + 1
-        new_status = "AT DESTINATION" if new_index >= len(route) - 1 else "ACTIVE"
-        _set_emergency_db_row(current["request_id"], new_index, requested, new_status)
-        EMERGENCY_STATE.update({"route_index": new_index, "current_junction": requested, "status": new_status})
-        return jsonify(_emergency_payload())
+        frame = int((request.get_json(silent=True) or {}).get("frame", 0))
+        current = _latest_emergency()
+        if not current:
+            return jsonify({"status": "error", "message": "No active emergency request."}), 400
+        route = [int(x) for x in json.loads(current["route_json"] or "[]")]
+        idx = int(current["route_index"] or 0)
+        if idx >= len(route) - 1:
+            return jsonify({"status": "success", "message": "Ambulance is already at the destination.", "emergency": _network_payload(frame)["emergency"]})
+        next_j = route[idx + 1]
+        # Current software workflow treats this endpoint as the operator's
+        # confirmation that the ambulance reached the next junction.
+        _, _, rows = _fetch_network_frame(frame)
+        congestion = {j: _congestion_score(rows[j]) for j in range(1, 5)}
+        next_seg = _edge_cost(next_j, route[idx + 2], congestion, rows) if idx + 2 < len(route) else 0
+        new_idx = idx + 1
+        status = "AT DESTINATION" if new_idx >= len(route) - 1 else "ACTIVE"
+        now = db_now()
+        conn = get_db_connection()
+        try:
+            ensure_emergency_table(conn)
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE emergency_requests
+                    SET current_junction=%s, route_index=%s, segment_seconds=%s,
+                        segment_started_at=%s, status=%s, updated_at=%s
+                    WHERE id=%s
+                """, (next_j, new_idx, next_seg, now, status, now, int(current["id"])))
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"status": "success", "message": f"Ambulance advanced to J{next_j}.", "emergency": _network_payload(frame)["emergency"]})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/emergency/clear", methods=["POST"])
-def clear_emergency():
+def emergency_clear():
     try:
-        current = _latest_emergency_from_db()
-        if current and current.get("request_id"):
-            _set_emergency_db_row(current["request_id"], current.get("route_index", 0), current.get("current_junction", 1), "CLEARED")
-        EMERGENCY_STATE.update({
-            "active": False,
-            "request_id": None,
-            "ambulance_id": None,
-            "current_junction": None,
-            "destination": None,
-            "emergency_level": "CRITICAL",
-            "route": [],
-            "route_index": 0,
-            "status": "NORMAL",
-            "started_at": None,
-        })
-        return jsonify({"status": "success", "message": "Emergency cleared. Normal AI optimization restored."})
+        now = db_now()
+        conn = get_db_connection()
+        try:
+            ensure_emergency_table(conn)
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE emergency_requests SET status='CLEARED', updated_at=%s WHERE status IN ('ACTIVE','AT DESTINATION')", (now,))
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"status": "success", "message": "Emergency corridor cleared. Normal adaptive control is restored."})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/network/schema")
+def network_schema_info():
+    return jsonify({
+        "status": "success",
+        "traffic_table": "traffic_data",
+        "columns_used": ["vehicle_count", "average_speed", "lane_occupancy", "flow_rate", "time_of_day", "waiting_time"],
+        "directional_data_available": False,
+        "note": "Direction-specific demand is estimated for the visualization from aggregate junction observations; it is not presented as measured lane data.",
+    })
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
-def handle_settings():
+def handle_settings_v4():
     global SYSTEM_SETTINGS
     if request.method == "POST":
         data = request.json or {}
-        SYSTEM_SETTINGS["min_green"] = int(data.get("min_green", SYSTEM_SETTINGS["min_green"]))
-        SYSTEM_SETTINGS["max_green"] = int(data.get("max_green", SYSTEM_SETTINGS["max_green"]))
-        SYSTEM_SETTINGS["yellow_time"] = int(data.get("yellow_time", SYSTEM_SETTINGS["yellow_time"]))
-        SYSTEM_SETTINGS["cycle_time"] = int(data.get("cycle_time", SYSTEM_SETTINGS["cycle_time"]))
+        min_green = max(5, int(data.get("min_green", SYSTEM_SETTINGS["min_green"])))
+        max_green = max(min_green, int(data.get("max_green", SYSTEM_SETTINGS["max_green"])))
+        yellow = max(3, int(data.get("yellow_time", SYSTEM_SETTINGS["yellow_time"])))
+        cycle = max(40, int(data.get("cycle_time", SYSTEM_SETTINGS["cycle_time"])))
+        SYSTEM_SETTINGS.update({"min_green": min_green, "max_green": max_green, "yellow_time": yellow, "cycle_time": cycle})
         return jsonify({"status": "success", "settings": SYSTEM_SETTINGS})
     return jsonify(SYSTEM_SETTINGS)
 
+
 if __name__ == "__main__":
-    # Render assigns a dynamic PORT. Default to 5000 for local testing.
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
