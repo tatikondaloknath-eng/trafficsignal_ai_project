@@ -23,7 +23,6 @@
                 <button class="nav-item" data-view="dataset"><i class="fa-solid fa-database"></i> Dataset</button>
                 <button class="nav-item" data-view="intersections"><i class="fa-solid fa-code-branch"></i> Intersections</button>
                 <button class="nav-item" data-view="optimization"><i class="fa-solid fa-brain"></i> AI Optimization</button>
-                <button class="nav-item ambulance-nav" data-view="ambulance"><i class="fa-solid fa-truck-medical"></i> Ambulance Dashboard</button>
                 <button class="nav-item emergency-nav" data-view="emergency"><i class="fa-solid fa-satellite-dish"></i> Live Network & Ambulance</button>
                 <button class="nav-item" data-view="simulation"><i class="fa-solid fa-car-side"></i> Simulation</button>
                 <button class="nav-item" data-view="reports"><i class="fa-solid fa-file-waveform"></i> Reports</button>
@@ -31,6 +30,7 @@
             </nav>
             <div class="system-status-indicator">
                 <span class="status-dot"></span> System Live & Connected
+                <small class="dispatch-link-note">Emergency Dispatch runs as a separate web service</small>
             </div>
         </aside>
 
@@ -308,114 +308,68 @@
                 </div>
             </section>
 
-            <!-- VIEW 5: AMBULANCE CONTROL DASHBOARD -->
-            <section id="view-ambulance" class="content-view">
-                <div class="emergency-hero-row">
-                    <div>
-                        <div class="eyebrow"><i class="fa-solid fa-shield-heart"></i> EMERGENCY VEHICLE CONTROL CENTER</div>
-                        <h2><i class="fa-solid fa-truck-medical emergency-icon"></i> Ambulance Dashboard</h2>
-                        <p class="hero-subtitle">Enter the ambulance's current junction and destination. The software calculates the route from the live database traffic state and uses A* to select the route.</p>
-                    </div>
-                    <div id="ambulance-dashboard-status" class="emergency-mode-badge"><span class="status-dot-mini"></span>READY</div>
-                </div>
-
-                <div class="ambulance-dashboard-grid">
-                    <div class="card ambulance-command-card">
-                        <div class="control-heading">
-                            <div class="control-icon"><i class="fa-solid fa-truck-medical"></i></div>
-                            <div><h3>Emergency Request</h3><p>Operator enters the current and destination junctions</p></div>
-                        </div>
-                        <form id="ambulance-form" class="emergency-form">
-                            <div class="form-group"><label>Ambulance ID</label><input id="ambulance-id" class="input-field" value="AMB-001" maxlength="30"></div>
-                            <div class="form-group"><label>Current Junction</label><select id="ambulance-current" class="select-input"><option value="1">Junction 1 (J1)</option><option value="2">Junction 2 (J2)</option><option value="3">Junction 3 (J3)</option><option value="4">Junction 4 (J4)</option></select></div>
-                            <div class="form-group"><label>Destination Junction</label><select id="ambulance-destination" class="select-input"><option value="1">Junction 1 (J1)</option><option value="2">Junction 2 (J2)</option><option value="3">Junction 3 (J3)</option><option value="4" selected>Junction 4 (J4) — Hospital</option></select></div>
-                            <div class="form-group"><label>Emergency Level</label><select id="ambulance-level" class="select-input"><option>CRITICAL</option><option>HIGH</option><option>URGENT</option></select></div>
-                            <div class="form-actions ambulance-form-actions">
-                                <button type="button" class="btn btn-secondary" id="ambulance-plan-btn"><i class="fa-solid fa-route"></i> Calculate A* Route</button>
-                                <button type="submit" class="btn btn-emergency" id="ambulance-activate-btn"><i class="fa-solid fa-bell"></i> Activate Green Corridor</button>
-                            </div>
-                        </form>
-                        <div class="emergency-note"><i class="fa-solid fa-circle-info"></i> This is a software prototype. The operator supplies the ambulance location; no GPS or IoT device is required.</div>
-                    </div>
-
-                    <div class="card ambulance-route-card">
-                        <div class="card-title-row"><h3><i class="fa-solid fa-route"></i> A* Route Planning</h3><span class="badge-accent" id="ambulance-route-algorithm">A*</span></div>
-                        <div id="ambulance-route-empty" class="empty-state">Enter the current and destination junctions, then calculate the route.</div>
-                        <div id="ambulance-route-result" class="ambulance-route-result hidden">
-                            <div class="route-hero-line"><span>Selected route</span><strong id="ambulance-route-text">J1 → J3 → J4</strong></div>
-                            <div class="route-stat-grid">
-                                <div><span>Estimated travel</span><strong id="ambulance-route-time">--</strong></div>
-                                <div><span>Current congestion</span><strong id="ambulance-route-congestion">--</strong></div>
-                            </div>
-                            <div id="ambulance-route-steps" class="route-steps"></div>
-                            <button class="btn btn-primary ambulance-open-network" id="ambulance-open-network"><i class="fa-solid fa-satellite-dish"></i> Open Live Network</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mt-4">
-                    <div class="card-title-row"><h3><i class="fa-solid fa-database"></i> Database Traffic Snapshot Used for Routing</h3><span class="small-muted" id="ambulance-db-source">Waiting for database...</span></div>
-                    <div class="ambulance-snapshot-grid" id="ambulance-snapshot-grid"></div>
-                </div>
-            </section>
-
-            <!-- VIEW 6: LIVE NETWORK & AMBULANCE -->
+            <!-- VIEW 5: LIVE NETWORK CONTROL -->
             <section id="view-emergency" class="content-view">
                 <div class="emergency-hero-row">
                     <div>
-                        <div class="eyebrow"><i class="fa-solid fa-satellite-dish"></i> LIVE DATABASE-DRIVEN NETWORK</div>
-                        <h2><i class="fa-solid fa-road emergency-icon"></i> Live Four-Junction Traffic Control</h2>
-                        <p class="hero-subtitle">Vehicle counts, speed, occupancy, flow and waiting time are replayed from the Aiven MySQL traffic dataset. Signal states are calculated from the stored traffic demand.</p>
+                        <div class="eyebrow"><i class="fa-solid fa-tower-broadcast"></i> LIVE NETWORK DIGITAL TWIN</div>
+                        <h2><i class="fa-solid fa-road emergency-icon"></i> Four-Junction Traffic Control Center</h2>
+                        <p class="hero-subtitle">The control center replays the traffic_data records as synchronized junction states. Vehicles are tied to the selected database frame, signals use the current demand record, and an active ambulance request is read from the separate Emergency Dispatch Web.</p>
                     </div>
-                    <div id="emergency-mode-badge" class="emergency-mode-badge"><span class="status-dot-mini"></span>NORMAL AI MODE</div>
+                    <div id="emergency-mode-badge" class="emergency-mode-badge"><span class="status-dot-mini"></span>NORMAL ADAPTIVE CONTROL</div>
                 </div>
 
                 <div class="network-toolbar card">
                     <div class="network-title-group">
-                        <h3><i class="fa-solid fa-road"></i> Live Four-Junction Network</h3>
+                        <h3><i class="fa-solid fa-network-wired"></i> Network Control Surface</h3>
                         <span id="network-clock">00:00</span>
                         <span id="network-db-frame" class="db-frame-badge">DB FRAME --</span>
                     </div>
                     <div class="network-kpis">
-                        <span>DB vehicles <b id="network-vehicles">--</b></span>
+                        <span>database vehicles <b id="network-vehicles">--</b></span>
                         <span>avg wait <b id="network-avg-wait">--</b></span>
                         <span>avg speed <b id="network-avg-speed">--</b></span>
-                        <span><b id="network-route-state">AI OPTIMIZED</b></span>
+                        <span><b id="network-route-state">NORMAL</b></span>
                     </div>
                 </div>
 
                 <div class="network-control-row card mt-3">
                     <div class="network-control-left">
-                        <label for="network-sim-speed">Simulation speed</label>
+                        <label for="network-sim-speed">Replay speed</label>
                         <select id="network-sim-speed" class="select-input compact-select">
-                            <option value="1">1× Real-time</option>
-                            <option value="4">4× Demo</option>
-                            <option value="8" selected>8× Demo</option>
-                            <option value="12">12× Demo</option>
+                            <option value="1">1× database time</option>
+                            <option value="2">2×</option>
+                            <option value="4" selected>4× demo</option>
+                            <option value="8">8× demo</option>
                         </select>
-                        <span class="small-muted">Presentation acceleration only; database measurements remain unchanged.</span>
+                        <label for="network-frame">Frame</label>
+                        <input id="network-frame" class="input-field network-frame-input" type="number" min="0" value="0">
+                        <button class="btn btn-secondary btn-small" id="network-pause-btn"><i class="fa-solid fa-pause"></i> Pause Replay</button>
                     </div>
                     <div class="network-control-right">
-                        <span class="db-live-indicator"><i class="fa-solid fa-circle"></i> MySQL replay <strong id="network-db-status">CONNECTED</strong></span>
-                        <button class="btn btn-secondary btn-small" id="network-refresh-btn"><i class="fa-solid fa-rotate"></i> Refresh DB Frame</button>
+                        <span class="db-live-indicator"><i class="fa-solid fa-circle"></i> Aiven MySQL <strong id="network-db-status">CONNECTED</strong></span>
+                        <button class="btn btn-secondary btn-small" id="network-refresh-btn"><i class="fa-solid fa-rotate"></i> Sync Database</button>
                     </div>
                 </div>
 
+                <div class="network-real-badge card mt-3">
+                    <div><strong>CONTROL LOGIC</strong><span>Database frame → demand estimate → signal phase → vehicle state → emergency corridor priority</span></div>
+                    <div><strong>EMERGENCY SOURCE</strong><span>Separate Ambulance Dispatch Web writes the active request to MySQL.</span></div>
+                    <div><strong>DATA NOTE</strong><span>Directional queues are estimated because the current traffic_data schema has no lane-direction field.</span></div>
+                </div>
+
                 <div class="network-canvas-wrap network-canvas-wrap-large">
-                    <canvas id="emergencyNetworkCanvas" width="1200" height="700"></canvas>
+                    <canvas id="emergencyNetworkCanvas" width="1200" height="720"></canvas>
                     <div class="canvas-overlay emergency-overlay">
-                        <span><i class="legend-square normal"></i> Normal junction</span>
-                        <span><i class="legend-square preparing"></i> Corridor preparing</span>
-                        <span><i class="legend-square active"></i> Emergency active</span>
+                        <span><i class="legend-light green"></i> Green = permitted movement</span>
+                        <span><i class="legend-light yellow"></i> Yellow = clearance</span>
+                        <span><i class="legend-light red"></i> Red = stop</span>
+                        <span><i class="legend-square active"></i> Pink = emergency coordination</span>
                         <span><i class="legend-route"></i> A* corridor</span>
                     </div>
                     <div id="network-emergency-banner" class="network-emergency-banner hidden">
                         <i class="fa-solid fa-truck-medical"></i>
-                        <span id="network-banner-text">GREEN CORRIDOR ACTIVE</span>
-                    </div>
-                    <div class="network-db-legend">
-                        <span><b>DB row</b> = current record replayed at the junction</span>
-                        <span>Cars stop at red / yellow and pass on green</span>
+                        <span id="network-banner-text">EMERGENCY CORRIDOR ACTIVE</span>
                     </div>
                 </div>
 
@@ -428,31 +382,25 @@
                     <div><span class="metric-label">LEVEL</span><strong id="emergency-level-readout">—</strong></div>
                 </div>
 
-                <div class="emergency-live-layout mt-3">
-                    <div class="card emergency-control-card live-control-card">
-                        <div class="control-heading">
-                            <div class="control-icon"><i class="fa-solid fa-satellite-dish"></i></div>
-                            <div><h3>Emergency Corridor Control</h3><p>Control the active request from the Ambulance Dashboard</p></div>
-                        </div>
+                <div class="network-control-grid mt-3">
+                    <div class="card">
+                        <div class="card-title-row"><h3><i class="fa-solid fa-traffic-light"></i> Junction Controllers</h3><span class="small-muted">Live database frame</span></div>
+                        <div id="emergency-junction-cards" class="junction-status-grid network-junction-grid"></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title-row"><h3><i class="fa-solid fa-route"></i> Active Corridor</h3><span class="small-muted">Dispatch web → MySQL → control center</span></div>
                         <div id="emergency-route-steps" class="route-steps network-route-steps"><div class="empty-state">No active emergency corridor.</div></div>
                         <div class="progress-track"><div class="progress-fill" id="emergency-progress-fill"></div></div>
                         <div class="progress-labels"><span>Start</span><strong id="emergency-progress-label">Normal traffic operation</strong><span>Destination</span></div>
+                        <div class="emergency-note control-note"><i class="fa-solid fa-circle-info"></i> Ambulance activation and location updates are intentionally handled by the separate Emergency Dispatch Web. The control center only observes and coordinates the network state.</div>
                         <div class="sim-controls emergency-action-row">
-                            <button class="btn btn-primary" id="emergency-auto-btn"><i class="fa-solid fa-play"></i> Start Auto Movement</button>
-                            <button class="btn btn-secondary" id="emergency-next-btn"><i class="fa-solid fa-forward-step"></i> Move to Next Junction</button>
-                            <button class="btn btn-danger" id="emergency-clear-btn"><i class="fa-solid fa-circle-stop"></i> End Emergency & Restore AI</button>
+                            <button class="btn btn-danger" id="emergency-clear-btn"><i class="fa-solid fa-circle-stop"></i> Emergency Override Clear</button>
                         </div>
-                    </div>
-                    <div class="card">
-                        <div class="card-title-row"><h3><i class="fa-solid fa-chart-line"></i> Live Database Conditions</h3><span class="small-muted">Current replay frame</span></div>
-                        <div class="junction-status-grid compact-status-grid" id="emergency-junction-cards"></div>
                     </div>
                 </div>
 
                 <div class="network-data-grid mt-3" id="network-data-grid"></div>
             </section>
-
-            <!-- VIEW 5: SIMULATION -->
 
             <section id="view-simulation" class="content-view">
                 <div class="card">
