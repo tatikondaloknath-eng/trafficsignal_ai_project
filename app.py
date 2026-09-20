@@ -719,18 +719,14 @@ def _network_payload(frame_index=0):
                 elif j == route[idx]:
                     status = "EMERGENCY ACTIVE"
                     if idx + 1 < len(route):
+                        # Force exactly the ambulance movement to GREEN.
+                        # The normal opposing movement is also held so the
+                        # emergency corridor is unambiguous in the simulation.
                         travel_dir = _edge_direction(j, route[idx + 1])
-                        # Keep the real signal semantics (red/yellow/green),
-                        # while the corridor status is a separate layer.
-                        if plan["phase"] in ("NS_GREEN", "NS_YELLOW") and travel_dir in ("North", "South"):
-                            pass
-                        elif plan["phase"] in ("EW_GREEN", "EW_YELLOW") and travel_dir in ("East", "West"):
-                            pass
-                        else:
-                            plan["phase"] = "EMERGENCY_HOLD"
-                            plan["phase_remaining"] = 0.0
-                            plan["signals"] = {d: ("GREEN" if d == travel_dir else "RED") for d in DIRECTIONS}
-                            plan["controller"] = "emergency-priority"
+                        plan["phase"] = "EMERGENCY_PRIORITY"
+                        plan["phase_remaining"] = max(0.0, float(plan.get("phase_remaining", 0.0)))
+                        plan["signals"] = {d: ("GREEN" if d == travel_dir else "RED") for d in DIRECTIONS}
+                        plan["controller"] = "emergency-priority"
                 elif idx + 1 < len(route) and j == route[idx + 1]:
                     status = "PREPARING"
                     plan["controller"] = "corridor-preparing"
@@ -922,6 +918,18 @@ def network_schema_info():
         "note": "Direction-specific demand is estimated for the visualization from aggregate junction observations; it is not presented as measured lane data.",
     })
 
+
+@app.route("/health")
+def health():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1 AS ok")
+            cursor.fetchone()
+        conn.close()
+        return jsonify({"status": "ok", "service": "traffic-control", "database": "reachable"})
+    except Exception as e:
+        return jsonify({"status": "error", "service": "traffic-control", "database": "unreachable", "message": str(e)}), 500
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def handle_settings_v4():
