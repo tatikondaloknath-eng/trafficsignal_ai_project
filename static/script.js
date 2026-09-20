@@ -26,7 +26,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 const currentSimJ = document.getElementById("sim-junction-select")?.value || 1;
                 loadSimJunctionConfig(currentSimJ);
             }
-            if (targetView === "ambulance") { loadAmbulanceDashboard(); }
             if (targetView === "emergency") { resizeEmergencyCanvas(); startNetworkLoop(); refreshNetworkState(); }
         });
     });
@@ -496,462 +495,210 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
 
+
     // -------------------------------------------------------------------------
-    // DATABASE-DRIVEN LIVE NETWORK + AMBULANCE CONTROL
+    // REALISTIC NETWORK DIGITAL TWIN
     // -------------------------------------------------------------------------
     const emergencyCanvas = document.getElementById("emergencyNetworkCanvas");
     const emergencyCtx = emergencyCanvas ? emergencyCanvas.getContext("2d") : null;
-    const networkNodePos = {1:{x:230,y:190}, 2:{x:900,y:190}, 3:{x:230,y:500}, 4:{x:900,y:500}};
-    const networkEdges = [[1,2],[2,4],[4,3],[3,1]];
+    const nodePos = {1:{x:245,y:185},2:{x:955,y:185},3:{x:245,y:535},4:{x:955,y:535}};
+    const nodeNames = {1:"J1",2:"J2",3:"J3",4:"J4"};
+    const edges = [[1,2],[2,4],[4,3],[3,1]];
     const dirs = ["North","South","East","West"];
-    let networkState = null;
-    let networkFrame = null;
-    let networkAnim = null;
-    let networkLastTime = performance.now();
-    let emergencySnapshot = null;
-    let emergencyRoute = [];
-    let emergencyMoveFrom = null;
-    let emergencyMoveTo = null;
-    let emergencyMoveStarted = 0;
-    let emergencyMoveDuration = 0;
-    let emergencyMoveToken = 0;
-    let emergencyAutoTimer = null;
-    let networkStartedAt = performance.now();
-    let networkPollingTimer = null;
+    let networkState=null;
+    let networkAnim=null;
+    let networkTimer=null;
+    let frameTimer=null;
+    let replayFrame=0;
+    let replayRunning=true;
+    let lastFrameAt=performance.now();
+    let lastFrameWall=performance.now();
+    let emergencyClearBusy=false;
 
-    const vehicleStates = {};
-    const directionVectors = {
-        North: {x:0,y:-1}, South:{x:0,y:1}, East:{x:1,y:0}, West:{x:-1,y:0}
-    };
-
-    function junctionLabel(id){ return `J${id}`; }
-    function statusFor(j){
-        const s=networkState?.junction_status||{};
-        return s[j]||s[String(j)]||"NORMAL";
-    }
+    function junctionLabel(id){return `J${id}`;}
+    function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+    function formatSeconds(s){s=Number(s||0);if(!isFinite(s))return "—";if(s<60)return `${Math.round(s)}s`;return `${Math.floor(s/60)}m ${Math.round(s%60)}s`;}
+    function statusFor(j){return String(networkState?.junctions?.[j]?.signal?.status||"NORMAL");}
 
     function resizeEmergencyCanvas(){
-        if(!emergencyCanvas || !emergencyCtx) return;
-        const rect=emergencyCanvas.getBoundingClientRect();
-        const dpr=Math.max(1,Math.min(2,window.devicePixelRatio||1));
-        emergencyCanvas.width=Math.max(800,Math.floor(rect.width*dpr));
-        emergencyCanvas.height=Math.max(520,Math.floor(rect.height*dpr));
+        if(!emergencyCanvas||!emergencyCtx)return;
+        const r=emergencyCanvas.getBoundingClientRect();const dpr=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+        emergencyCanvas.width=Math.max(900,Math.floor(r.width*dpr));emergencyCanvas.height=Math.max(600,Math.floor(r.height*dpr));
         emergencyCtx.setTransform(dpr,0,0,dpr,0,0);
     }
 
     function startNetworkLoop(){
-        if(networkAnim) return;
+        if(!emergencyCanvas)return;
         resizeEmergencyCanvas();
-        networkLastTime=performance.now();
-        networkAnim=requestAnimationFrame(networkLoop);
-        if(!networkPollingTimer){
-            refreshNetworkState();
-            networkPollingTimer=setInterval(refreshNetworkState,5000);
-        }
-    }
-
-    function stopNetworkLoop(){
-        if(networkAnim) cancelAnimationFrame(networkAnim);
-        networkAnim=null;
-        if(networkPollingTimer) clearInterval(networkPollingTimer);
-        networkPollingTimer=null;
+        if(!networkAnim) networkAnim=requestAnimationFrame(networkLoop);
+        if(!networkTimer){refreshNetworkState();networkTimer=true;}
+        scheduleFrameReplay();
     }
 
     function networkLoop(now){
-        const dt=Math.min(0.05,Math.max(0.001,(now-networkLastTime)/1000));
-        networkLastTime=now;
-        updateDatabaseDrivenVehicles(dt);
-        drawDatabaseDrivenNetwork(now);
-        networkAnim=requestAnimationFrame(networkLoop);
+        const dt=Math.min(.05,Math.max(.001,(now-lastFrameWall)/1000));lastFrameWall=now;
+        drawRealNetwork(now,dt);networkAnim=requestAnimationFrame(networkLoop);
     }
 
-    function currentTick(){ return Math.floor(Date.now()/5000); }
-
-    async function refreshNetworkState(forceTick=null){
+    async function refreshNetworkState(){
         try{
-            const tick=forceTick==null?currentTick():forceTick;
-            const res=await fetch(`/api/network/state?tick=${tick}`,{cache:"no-store"});
-            const data=await res.json();
-            if(!res.ok || data.status!=="success") throw new Error(data.message||"Network state request failed");
-            networkState=data;
-            emergencySnapshot={
-                status:data.status,
-                emergency:data.emergency,
-                junction_status:data.junction_status,
-                congestion:Object.fromEntries(Object.entries(data.junctions||{}).map(([k,v])=>[k,Math.min(100,Math.round(v.lane_occupancy*0.55+v.waiting_time*0.35+v.vehicle_count*0.1))])),
-                estimated_time_seconds:data.emergency_eta_seconds,
-                next_junction:data.emergency_next_junction,
-                segment_time_seconds:data.emergency_segment_time_seconds
-            };
-            if(data.emergency?.route) emergencyRoute=data.emergency.route.map(Number);
-            renderNetworkDashboard(data);
-            syncEmergencyMotionFromServer(data);
-            document.getElementById("network-db-status")?.replaceChildren(document.createTextNode("CONNECTED"));
-        }catch(err){
-            console.error("Network state error",err);
-            const el=document.getElementById("network-db-status");
-            if(el) el.innerText="DATABASE ERROR";
+            const res=await fetch(`/api/network/state?frame=${replayFrame}`,{cache:"no-store"});
+            const data=await res.json();if(!res.ok||data.status!=="success")throw new Error(data.message||"Network state failed");
+            networkState=data;replayFrame=Number(data.frame_index||0);document.getElementById("network-frame")?.setAttribute("value",String(replayFrame));
+            renderNetworkDashboard(data);resizeEmergencyCanvas();
+        }catch(e){
+            console.error(e);document.getElementById("network-db-status")?.replaceChildren(document.createTextNode("ERROR"));
         }
     }
 
     function renderNetworkDashboard(data){
-        const e=data.emergency||{};
-        const active=!!e.active;
+        const e=data.emergency||{};const active=!!e.active;
         const badge=document.getElementById("emergency-mode-badge");
-        if(badge){
-            badge.classList.toggle("active",active);
-            badge.innerHTML=`<span class="status-dot-mini"></span>${active?"EMERGENCY PRIORITY ACTIVE":"NORMAL AI MODE"}`;
-        }
-        const frame=document.getElementById("network-db-frame");
-        if(frame) frame.innerText=`DB FRAME ${data.tick} • J1:${data.junctions?.["1"]?.record_id||"--"} J2:${data.junctions?.["2"]?.record_id||"--"} J3:${data.junctions?.["3"]?.record_id||"--"} J4:${data.junctions?.["4"]?.record_id||"--"}`;
-        if(document.getElementById("network-vehicles")) document.getElementById("network-vehicles").innerText=Number(data.total_database_vehicles||0).toLocaleString();
-        if(document.getElementById("network-avg-wait")) document.getElementById("network-avg-wait").innerText=`${Number(data.network_avg_waiting||0).toFixed(1)}s`;
-        if(document.getElementById("network-avg-speed")) document.getElementById("network-avg-speed").innerText=`${Number(data.network_avg_speed||0).toFixed(1)} km/h`;
-        if(document.getElementById("network-route-state")) document.getElementById("network-route-state").innerText=active?"EMERGENCY CORRIDOR":"AI OPTIMIZED";
+        if(badge){badge.innerHTML=`<span class="status-dot-mini"></span>${active?"EMERGENCY CORRIDOR ACTIVE":"NORMAL ADAPTIVE CONTROL"}`;badge.classList.toggle("active",active);}
         const banner=document.getElementById("network-emergency-banner");
-        if(banner) banner.classList.toggle("hidden",!active);
-        const bannerText=document.getElementById("network-banner-text");
-        if(bannerText) bannerText.innerText=active?`${e.ambulance_id||"AMB-001"} • ${e.emergency_level||"CRITICAL"} • GREEN CORRIDOR ACTIVE`:"";
-        if(document.getElementById("network-ambulance-id")) document.getElementById("network-ambulance-id").innerText=active?(e.ambulance_id||"AMB-001"):"No active request";
-        if(document.getElementById("emergency-route-text")) document.getElementById("emergency-route-text").innerText=emergencyRoute.length?emergencyRoute.map(junctionLabel).join(" → "):"—";
-        if(document.getElementById("emergency-current-readout")) document.getElementById("emergency-current-readout").innerText=active?junctionLabel(e.current_junction):"—";
-        if(document.getElementById("emergency-next-readout")) document.getElementById("emergency-next-readout").innerText=active&&data.emergency_next_junction?junctionLabel(data.emergency_next_junction):(active?"Destination":"—");
-        if(document.getElementById("emergency-eta")) document.getElementById("emergency-eta").innerText=active?formatSeconds(data.emergency_eta_seconds):"—";
-        if(document.getElementById("emergency-level-readout")) document.getElementById("emergency-level-readout").innerText=active?(e.emergency_level||"CRITICAL"):"—";
-        const progress=emergencyRoute.length>1?(Number(e.route_index||0)/(emergencyRoute.length-1))*100:0;
-        const pf=document.getElementById("emergency-progress-fill"); if(pf) pf.style.width=`${Math.max(0,Math.min(100,progress))}%`;
-        const pl=document.getElementById("emergency-progress-label"); if(pl) pl.innerText=active?`${junctionLabel(e.current_junction)} → ${junctionLabel(e.destination)}`:"Normal traffic operation";
-        renderEmergencyRouteSteps(data);
-        renderNetworkJunctionCards(data);
-        renderNetworkDataGrid(data);
-        renderAmbulanceSnapshot(data);
+        if(banner){banner.classList.toggle("hidden",!active);if(active)document.getElementById("network-banner-text").textContent=`${e.ambulance_id} • ${e.emergency_level} • GREEN CORRIDOR`}
+        document.getElementById("network-db-frame")?.replaceChildren(document.createTextNode(`DB FRAME ${data.frame_index+1} / ${data.frame_count}`));
+        document.getElementById("network-vehicles")?.replaceChildren(document.createTextNode(Number(data.total_database_vehicles||0).toLocaleString()));
+        document.getElementById("network-avg-wait")?.replaceChildren(document.createTextNode(`${Number(data.network_average_wait||0).toFixed(1)}s`));
+        document.getElementById("network-avg-speed")?.replaceChildren(document.createTextNode(`${Number(data.network_average_speed||0).toFixed(1)} km/h`));
+        document.getElementById("network-route-state")?.replaceChildren(document.createTextNode(active?"EMERGENCY COORDINATION":"NORMAL"));
+        if(active){
+            document.getElementById("network-ambulance-id").textContent=e.ambulance_id||"—";
+            document.getElementById("emergency-route-text").textContent=(e.route||[]).map(junctionLabel).join(" → ");
+            document.getElementById("emergency-current-readout").textContent=junctionLabel(e.current_junction);
+            document.getElementById("emergency-next-readout").textContent=e.next_junction?junctionLabel(e.next_junction):"DESTINATION";
+            document.getElementById("emergency-eta").textContent=formatSeconds(e.estimated_time_seconds);
+            document.getElementById("emergency-level-readout").textContent=e.emergency_level||"—";
+        }else{
+            ["network-ambulance-id","emergency-route-text","emergency-current-readout","emergency-next-readout","emergency-eta","emergency-level-readout"].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent="—";});
+            document.getElementById("network-ambulance-id").textContent="No active request";
+        }
+        renderJunctionStatusCards(data);
+        renderRouteSteps(data);
+        renderDataCards(data);
     }
 
-    function renderEmergencyRouteSteps(data){
-        const box=document.getElementById("emergency-route-steps");
-        if(!box) return;
-        const e=data.emergency||{};
-        if(!e.active||!emergencyRoute.length){box.innerHTML=`<div class="empty-state">No active emergency corridor.</div>`;return;}
-        const idx=Number(e.route_index||0);
-        const statuses=data.junction_status||{};
-        box.innerHTML=emergencyRoute.map((j,i)=>{
-            const s=statuses[j]||statuses[String(j)]||"NORMAL";
-            const marker=i===idx?"CURRENT":i<idx?"PASSED":"NEXT";
-            return `<div class="route-step ${s.toLowerCase().replaceAll(' ','-')}"><span class="step-index">${i+1}</span><strong>${junctionLabel(j)}</strong><span>${s}</span><em>${marker}</em></div>`;
-        }).join("");
-    }
-
-    function renderNetworkJunctionCards(data){
-        const box=document.getElementById("emergency-junction-cards");
-        if(!box) return;
-        const statuses=data.junction_status||{};
+    function renderJunctionStatusCards(data){
+        const box=document.getElementById("emergency-junction-cards");if(!box)return;
         box.innerHTML=[1,2,3,4].map(j=>{
-            const v=data.junctions?.[String(j)]||{};
-            const s=statuses[j]||statuses[String(j)]||"NORMAL";
-            const signals=Object.values(v.approaches||{}).map(a=>a.signal);
-            const green=signals.filter(x=>x==="GREEN").length;
-            const yellow=signals.filter(x=>x==="YELLOW").length;
-            const red=signals.filter(x=>x==="RED").length;
-            return `<div class="junction-live-card ${s.toLowerCase().replaceAll(' ','-')} data-junction-card">
-                <div class="junction-live-head"><strong>J${j}</strong><span>${s}</span></div>
-                <div class="junction-card-signals"><span class="signal-pill green">G ${green}</span><span class="signal-pill yellow">Y ${yellow}</span><span class="signal-pill red">R ${red}</span></div>
-                <div class="junction-card-data"><span>DB vehicles <b>${Number(v.vehicle_count||0).toLocaleString()}</b></span><span>Speed <b>${Number(v.average_speed||0).toFixed(1)}</b></span></div>
-                <div class="junction-card-data"><span>Occ <b>${Number(v.lane_occupancy||0).toFixed(1)}%</b></span><span>Wait <b>${Number(v.waiting_time||0).toFixed(1)}s</b></span></div>
+            const v=data.junctions[String(j)]||data.junctions[j];const s=v.signal||{};const st=s.status||"NORMAL";
+            return `<div class="junction-status-card ${st.toLowerCase().replace(/ /g,'-')}">
+              <div class="jsc-head"><strong>${junctionLabel(j)}</strong><span>${st}</span></div>
+              <div class="signal-row">${dirs.map(d=>`<span class="signal-dot ${String(s.signals?.[d]||'RED').toLowerCase()}" title="${d}"></span>`).join('')}</div>
+              <div class="jsc-meta"><span>${v.vehicle_count} vehicles</span><span>${Number(v.waiting_time).toFixed(1)}s wait</span></div>
+              <div class="jsc-meta"><span>${Number(v.average_speed).toFixed(1)} km/h</span><span>${Number(v.lane_occupancy).toFixed(1)}% occ</span></div>
+              <div class="jsc-phase">${s.phase} <b>${Number(s.phase_remaining||0).toFixed(1)}s</b></div>
             </div>`;
-        }).join("");
+        }).join('');
     }
 
-    function renderNetworkDataGrid(data){
-        const box=document.getElementById("network-data-grid");
-        if(!box) return;
-        box.innerHTML=[1,2,3,4].map(j=>{
-            const v=data.junctions?.[String(j)]||{};
-            return `<div class="card network-data-card"><div class="card-title-row"><h3>J${j} — Database Record #${v.record_id||"--"}</h3><span class="small-muted">${v.time_of_day||"unknown"}</span></div>
-                <div class="network-record-metrics"><div><span>Vehicles</span><strong>${Number(v.vehicle_count||0).toLocaleString()}</strong></div><div><span>Flow rate</span><strong>${Number(v.flow_rate||0).toFixed(0)}</strong></div><div><span>Occupancy</span><strong>${Number(v.lane_occupancy||0).toFixed(1)}%</strong></div><div><span>Waiting</span><strong>${Number(v.waiting_time||0).toFixed(1)}s</strong></div></div></div>`;
-        }).join("");
+    function renderRouteSteps(data){
+        const box=document.getElementById("emergency-route-steps");if(!box)return;const e=data.emergency||{};
+        if(!e.active){box.innerHTML='<div class="empty-state">No active emergency corridor.</div>';document.getElementById("emergency-progress-fill").style.width='0%';document.getElementById("emergency-progress-label").textContent='Normal traffic operation';return;}
+        const route=e.route||[];const idx=Number(e.route_index||0);
+        box.innerHTML=route.map((j,i)=>`<div class="route-step ${i===idx?'active':''} ${i<idx?'passed':''} ${i===idx+1?'preparing':''}"><span class="step-index">${i+1}</span><strong>${junctionLabel(j)}</strong><span>${i<idx?'PASSED':i===idx?'ACTIVE':i===route.length-1?'DESTINATION':'PREPARING'}</span><em>${i===idx?'CURRENT':i+1===route.length?'FINAL':'CORRIDOR'}</em></div>`).join('');
+        const pct=((idx+Math.min(Number(e.segment_progress||0),.99))/(Math.max(1,route.length-1)))*100;document.getElementById("emergency-progress-fill").style.width=`${pct}%`;
+        document.getElementById("emergency-progress-label").textContent=e.status==='AT DESTINATION'?"Ambulance reached destination":`J${e.current_junction} → ${e.next_junction?`J${e.next_junction}`:'destination'}`;
     }
 
-    function renderAmbulanceSnapshot(data){
-        const box=document.getElementById("ambulance-snapshot-grid");
-        if(!box) return;
-        const src=document.getElementById("ambulance-db-source");
-        if(src) src.innerText=`Live frame ${data.tick} • ${data.source||"traffic_data"}`;
-        box.innerHTML=[1,2,3,4].map(j=>{
-            const v=data.junctions?.[String(j)]||{};
-            const traffic=v.lane_occupancy>=70?"HIGH":v.lane_occupancy>=40?"MEDIUM":"LOW";
-            return `<div class="snapshot-tile"><div class="snapshot-junction">J${j}</div><div><span>Vehicles</span><strong>${v.vehicle_count??"--"}</strong></div><div><span>Flow</span><strong>${Number(v.flow_rate||0).toFixed(0)}</strong></div><div><span>Wait</span><strong>${Number(v.waiting_time||0).toFixed(1)}s</strong></div><div><span>Traffic</span><strong>${traffic}</strong></div></div>`;
-        }).join("");
+    function renderDataCards(data){
+        const box=document.getElementById("network-data-grid");if(!box)return;
+        box.innerHTML=[1,2,3,4].map(j=>{const v=data.junctions[String(j)]||data.junctions[j];return `<div class="card network-data-card"><div class="card-title-row"><h3>${junctionLabel(j)} <span class="badge-accent">DB #${v.source_id}</span></h3><span class="small-muted">${v.time_of_day||'—'}</span></div><div class="network-record-metrics"><div><span>Vehicle count</span><strong>${v.vehicle_count}</strong></div><div><span>Flow rate</span><strong>${Number(v.flow_rate).toFixed(1)}</strong></div><div><span>Occupancy</span><strong>${Number(v.lane_occupancy).toFixed(1)}%</strong></div><div><span>Waiting</span><strong>${Number(v.waiting_time).toFixed(1)}s</strong></div></div></div>`}).join('');
     }
 
-    function formatSeconds(sec){
-        const s=Math.max(0,Number(sec||0));
-        if(s<60) return `${s.toFixed(0)} s`;
-        const m=Math.floor(s/60),r=Math.round(s%60);
-        return `${m}m ${String(r).padStart(2,'0')}s`;
-    }
-
-    function updateDatabaseDrivenVehicles(dt){
-        if(!networkState?.junctions) return;
-        Object.entries(networkState.junctions).forEach(([jid, data])=>{
-            if(!vehicleStates[jid]) vehicleStates[jid]={};
-            dirs.forEach((dir,di)=>{
-                const a=data.approaches?.[dir];
-                if(!a) return;
-                const key=`${jid}-${dir}`;
-                const target=a.visible_vehicles||0;
-                if(!vehicleStates[jid][dir]){
-                    vehicleStates[jid][dir]=Array.from({length:target},(_,i)=>({t:(i+1)/(target+1),lane:i%2,seed:i}));
-                }
-                let arr=vehicleStates[jid][dir];
-                if(arr.length<target){
-                    for(let i=arr.length;i<target;i++) arr.push({t:(i+1)/(target+1),lane:i%2,seed:i});
-                } else if(arr.length>target){ arr.length=target; }
-                const speedNorm=Math.max(0.012,Math.min(0.075,(Number(a.speed_kmh||20)/65)*0.055));
-                arr.forEach(v=>{
-                    const state=a.signal;
-                    const stop=0.84;
-                    const canMove=state==="GREEN" || (state==="YELLOW" && v.t>0.76);
-                    if(canMove) v.t+=speedNorm*dt;
-                    else if(v.t>stop) v.t=stop;
-                    if(v.t>1.08){v.t=0.02 + ((v.seed*17)%13)/100;}
-                });
-            });
-        });
-    }
-
-    function roundRectPath(ctx,x,y,w,h,r){
-        const rr=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+rr,y);ctx.arcTo(x+w,y,x+w,y+h,rr);ctx.arcTo(x+w,y+h,x,y+h,rr);ctx.arcTo(x,y+h,x,y,rr);ctx.arcTo(x,y,x+w,y,rr);ctx.closePath();
-    }
-
-    function drawRoadSegment(ctx,a,b,width=76){
-        const ax=a.x,ay=a.y,bx=b.x,by=b.y;
-        const dx=bx-ax,dy=by-ay,len=Math.hypot(dx,dy)||1,nx=-dy/len,ny=dx/len;
-        ctx.save();
-        ctx.strokeStyle="#1b2745";ctx.lineWidth=width;ctx.lineCap="butt";ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-        ctx.strokeStyle="#374765";ctx.lineWidth=width-6;ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-        ctx.strokeStyle="rgba(255,255,255,.18)";ctx.lineWidth=2;ctx.setLineDash([18,18]);ctx.beginPath();ctx.moveTo(ax+nx*9,ay+ny*9);ctx.lineTo(bx+nx*9,by+ny*9);ctx.stroke();
-        ctx.beginPath();ctx.moveTo(ax-nx*9,ay-ny*9);ctx.lineTo(bx-nx*9,by-ny*9);ctx.stroke();ctx.setLineDash([]);
+    function roadEnds(a,b){const pa=nodePos[a],pb=nodePos[b];return {x1:pa.x,y1:pa.y,x2:pb.x,y2:pb.y};}
+    function drawRoad(ctx,a,b){
+        const {x1,y1,x2,y2}=roadEnds(a,b);const horizontal=y1===y2;
+        ctx.save();ctx.lineWidth=92;ctx.strokeStyle='#263451';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+        ctx.lineWidth=2;ctx.setLineDash([22,18]);ctx.strokeStyle='rgba(104,123,153,.65)';ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.setLineDash([]);
+        ctx.lineWidth=1;ctx.strokeStyle='rgba(122,142,175,.30)';
+        if(horizontal){for(const off of [-28,28]){ctx.beginPath();ctx.moveTo(x1,y1+off);ctx.lineTo(x2,y2+off);ctx.stroke();}}
+        else {for(const off of [-28,28]){ctx.beginPath();ctx.moveTo(x1+off,y1);ctx.lineTo(x2+off,y2);ctx.stroke();}}
         ctx.restore();
     }
-
-    function drawArmRoad(ctx,p,dir){
-        const v=directionVectors[dir], L=170;
-        const q={x:p.x-v.x*L,y:p.y-v.y*L};
-        drawRoadSegment(ctx,q,p,76);
-        // stop line is before the junction
-        const s={x:p.x-v.x*34,y:p.y-v.y*34}, n={x:-v.y,y:v.x};
-        ctx.save();ctx.strokeStyle="rgba(255,255,255,.78)";ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(s.x+n.x*28,s.y+n.y*28);ctx.lineTo(s.x-n.x*28,s.y-n.y*28);ctx.stroke();ctx.restore();
+    function drawApproach(ctx,j,dir){
+        const p=nodePos[j], L=125;let x2=p.x,y2=p.y;if(dir==='North')y2-=L;if(dir==='South')y2+=L;if(dir==='East')x2+=L;if(dir==='West')x2-=L;
+        ctx.save();ctx.lineWidth=92;ctx.strokeStyle='#263451';ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(x2,y2);ctx.stroke();
+        ctx.setLineDash([18,16]);ctx.lineWidth=2;ctx.strokeStyle='rgba(104,123,153,.62)';ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(x2,y2);ctx.stroke();ctx.restore();
     }
-
-    function drawSignalHead(ctx,x,y,state){
-        ctx.save();roundRectPath(ctx,x,y,18,42,5);ctx.fillStyle="#0c1327";ctx.fill();
-        const colors={RED:"#ef476f",YELLOW:"#ffd166",GREEN:"#06d6a0"};
-        ["RED","YELLOW","GREEN"].forEach((c,i)=>{ctx.beginPath();ctx.arc(x+9,y+8+i*13,4,0,Math.PI*2);ctx.fillStyle=state===c?colors[c]:"#29344b";ctx.shadowBlur=state===c?10:0;ctx.shadowColor=colors[c];ctx.fill();});
-        ctx.restore();
+    function drawSignal(ctx,x,y,state){const c=state==='GREEN'?'#19d38a':state==='YELLOW'?'#ffd166':'#ff4e73';ctx.save();ctx.fillStyle='#0b1327';ctx.strokeStyle='#52627f';ctx.lineWidth=1;ctx.roundRect(x-7,y-7,14,14,4);ctx.fill();ctx.stroke();ctx.fillStyle=c;ctx.beginPath();ctx.arc(x,y,3.5,0,Math.PI*2);ctx.fill();ctx.restore();}
+    function drawJunction(ctx,j,v){
+        const p=nodePos[j], s=v.signal, active=s.status!=='NORMAL';
+        ctx.save();ctx.shadowBlur=active?25:12;ctx.shadowColor=active?'rgba(255,62,165,.75)':'rgba(72,202,228,.26)';ctx.fillStyle=active?'#35163a':'#0b1830';ctx.strokeStyle=active?'#ff3ea5':'#4e6590';ctx.lineWidth=active?4:2;ctx.beginPath();ctx.arc(p.x,p.y,47,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.shadowBlur=0;
+        ctx.fillStyle='#eef4ff';ctx.font='900 18px Segoe UI';ctx.textAlign='center';ctx.fillText(junctionLabel(j),p.x,p.y+6);
+        ctx.font='700 9px Segoe UI';ctx.fillStyle=active?'#ff9bd1':'#7081a0';ctx.fillText(s.status,p.x,p.y+64);ctx.restore();
+        drawSignal(ctx,p.x-60,p.y-60,s.signals.North);drawSignal(ctx,p.x+60,p.y+60,s.signals.South);drawSignal(ctx,p.x+60,p.y-60,s.signals.East);drawSignal(ctx,p.x-60,p.y+60,s.signals.West);
     }
-
-    function drawJunction(ctx,jid,data){
-        const p=networkNodePos[jid];
-        const status=statusFor(jid);
-        const ring=status==="ACTIVE"?"#ff3ea5":status==="PREPARING"?"#ffd166":"#466180";
-        // central intersection box
-        ctx.save();ctx.beginPath();ctx.arc(p.x,p.y,58,0,Math.PI*2);ctx.fillStyle="#0a1328";ctx.fill();ctx.lineWidth=5;ctx.strokeStyle=ring;ctx.shadowBlur=status!=="NORMAL"?26:13;ctx.shadowColor=ring;ctx.stroke();ctx.shadowBlur=0;
-        ctx.fillStyle="#e7efff";ctx.font="900 18px Segoe UI";ctx.textAlign="center";ctx.fillText(`J${jid}`,p.x,p.y+6);
-        ctx.fillStyle=ring;ctx.font="800 10px Segoe UI";ctx.fillText(status,p.x,p.y+77);ctx.restore();
-        const headOffset=76;
-        drawSignalHead(ctx,p.x-headOffset,p.y-94,data.approaches.North.signal);
-        drawSignalHead(ctx,p.x-headOffset,p.y+52,data.approaches.South.signal);
-        drawSignalHead(ctx,p.x+58,p.y-headOffset,data.approaches.West.signal);
-        drawSignalHead(ctx,p.x-20,p.y-headOffset,data.approaches.East.signal);
-    }
-
-    function drawVehiclesAtJunction(ctx,jid,data){
-        const p=networkNodePos[jid];
-        dirs.forEach(dir=>{
-            const a=data.approaches?.[dir]; if(!a) return;
-            const v=directionVectors[dir], n={x:-v.y,y:v.x};
-            const arr=vehicleStates[jid]?.[dir]||[];
-            arr.forEach((car,idx)=>{
-                const dist=170*(1-car.t);
-                const cx=p.x+v.x*dist+n.x*(car.lane===0?12:-12);
-                const cy=p.y+v.y*dist+n.y*(car.lane===0?12:-12);
-                const w=22,h=11;
-                ctx.save();ctx.translate(cx,cy);ctx.rotate(Math.atan2(v.y,v.x));
-                roundRectPath(ctx,-w/2,-h/2,w,h,3);
-                const palettes=["#48cae4","#64dfdf","#90e0ef","#f8cf6a","#6ee7b7","#d7ddea"];
-                ctx.fillStyle=palettes[(idx+jid)%palettes.length];ctx.fill();
-                ctx.fillStyle="rgba(7,12,25,.72)";ctx.fillRect(-5,-4,7,3);ctx.restore();
-            });
-        });
-    }
-
-    function drawAStarCorridor(ctx){
-        if(!emergencyRoute||emergencyRoute.length<2) return;
-        ctx.save();ctx.strokeStyle="#ff3ea5";ctx.lineWidth=7;ctx.globalAlpha=.25;ctx.setLineDash([16,12]);ctx.beginPath();
-        emergencyRoute.forEach((j,i)=>{const p=networkNodePos[j];if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);});ctx.stroke();
-        ctx.globalAlpha=1;ctx.strokeStyle="#ff3ea5";ctx.lineWidth=3;ctx.setLineDash([10,8]);ctx.beginPath();
-        emergencyRoute.forEach((j,i)=>{const p=networkNodePos[j];if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);});ctx.stroke();ctx.restore();
-    }
-
-    function drawEmergencyAmbulance(ctx,now){
-        const e=networkState?.emergency; if(!e?.active || !e.route?.length) return;
-        let from=e.route[e.route_index]||e.current_junction;
-        let to=from,t=0;
-        if(emergencyMoveFrom!=null && emergencyMoveTo!=null){
-            from=emergencyMoveFrom;to=emergencyMoveTo;
-            t=Math.max(0,Math.min(1,(now-emergencyMoveStarted)/Math.max(500,emergencyMoveDuration)));
-        }
-        const a=networkNodePos[from],b=networkNodePos[to]; if(!a||!b)return;
-        const x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t;
-        const angle=Math.atan2(b.y-a.y,b.x-a.x);
-        ctx.save();ctx.translate(x,y);ctx.rotate(angle);ctx.shadowBlur=28;ctx.shadowColor="#ff3ea5";
-        roundRectPath(ctx,-26,-12,52,24,6);ctx.fillStyle="#f7f8ff";ctx.fill();
-        ctx.fillStyle="#ef476f";ctx.fillRect(-26,-3,52,6);ctx.fillStyle="#a7e9ff";ctx.fillRect(-9,-9,16,6);
-        ctx.fillStyle="#111827";ctx.beginPath();ctx.arc(-15,13,5,0,Math.PI*2);ctx.arc(15,13,5,0,Math.PI*2);ctx.fill();
-        ctx.fillStyle="#ff3ea5";ctx.fillRect(10,-12,10,4);ctx.fillStyle="#111";ctx.font="900 9px Segoe UI";ctx.textAlign="center";ctx.fillText("AMB",0,3);ctx.restore();
-    }
-
-    function drawDatabaseDrivenNetwork(now){
-        if(!emergencyCtx||!emergencyCanvas) return;
-        const rect=emergencyCanvas.getBoundingClientRect(),W=rect.width,H=rect.height,ctx=emergencyCtx;
-        ctx.clearRect(0,0,W,H);
-        ctx.fillStyle="#061025";ctx.fillRect(0,0,W,H);
-        // grid
-        ctx.strokeStyle="rgba(91,119,156,.09)";ctx.lineWidth=1;
-        for(let x=0;x<W;x+=36){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
-        for(let y=0;y<H;y+=36){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
-        // network roads
-        const p=networkNodePos;
-        drawRoadSegment(ctx,p[1],p[2],76);drawRoadSegment(ctx,p[3],p[4],76);drawRoadSegment(ctx,p[1],p[3],76);drawRoadSegment(ctx,p[2],p[4],76);
-        [1,2,3,4].forEach(j=>dirs.forEach(d=>drawArmRoad(ctx,p[j],d)));
-        drawAStarCorridor(ctx);
-        if(networkState?.junctions){[1,2,3,4].forEach(j=>drawVehiclesAtJunction(ctx,j,networkState.junctions[String(j)]||{}));[1,2,3,4].forEach(j=>drawJunction(ctx,j,networkState.junctions[String(j)]||{}));}
-        drawEmergencyAmbulance(ctx,now);
-        // labels on roads
-        ctx.fillStyle="#7283a2";ctx.font="700 10px Segoe UI";ctx.textAlign="center";ctx.fillText("NORTH",p[1].x,p[1].y-150);ctx.fillText("SOUTH",p[3].x,p[3].y+150);ctx.fillText("WEST",p[1].x-145,p[1].y-7);ctx.fillText("EAST",p[2].x+145,p[2].y-7);
-        const elapsed=Math.floor((now-networkStartedAt)/1000);const clock=document.getElementById("network-clock");if(clock)clock.innerText=`${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
-    }
-
-    function syncEmergencyMotionFromServer(data){
-        const e=data.emergency;
-        if(!e?.active){ emergencyMoveFrom=null; emergencyMoveTo=null; return; }
-        if(emergencyMoveFrom!=null && emergencyMoveTo!=null) return;
-        if(Number(e.route_index)<e.route.length-1){
-            emergencyMoveFrom=e.route[e.route_index];
-            emergencyMoveTo=e.route[e.route_index+1];
+    function seeded(j,dir,i){let n=j*92821+i*313+dir.charCodeAt(0)*97;return (Math.sin(n)*43758.5453)%1;}
+    function drawVehicle(ctx,x,y,angle,type='car',emergency=false){ctx.save();ctx.translate(x,y);ctx.rotate(angle);ctx.fillStyle=emergency?'#ff3ea5':(type==='truck'?'#ffc857':'#52c5ff');ctx.strokeStyle='#dce7ff';ctx.lineWidth=1;ctx.roundRect(-8,-4,16,8,3);ctx.fill();ctx.stroke();ctx.fillStyle='#0c162b';ctx.fillRect(-3,-2,6,4);ctx.restore();}
+    function drawApproachVehicles(ctx,j,dir,v,now){
+        const p=nodePos[j];const state=v.signal.signals[dir];const count=Math.min(8,Math.max(0,Math.round(v.approach_demand[dir]/14)));if(!count)return;
+        const speedKph=Math.max(2,Number(v.average_speed)||2);const speedPx=(speedKph/3.6)*0.55;const t=now/1000;const stop=78;
+        for(let i=0;i<count;i++){
+            let dist=((t*speedPx)+(i*32)+Math.abs(seeded(j,dir,i))*26)%210;
+            let d=dist;if(state!=='GREEN')d=Math.min(d,stop-i*24);if(d<18)d=18;
+            let x=p.x,y=p.y,ang=0;
+            if(dir==='North'){x+=-18+(i%2)*36;y=p.y-d;ang=Math.PI/2;}if(dir==='South'){x+=-18+(i%2)*36;y=p.y+d;ang=-Math.PI/2;}if(dir==='East'){x=p.x+d;y+=-18+(i%2)*36;ang=Math.PI;}if(dir==='West'){x=p.x-d;y+=-18+(i%2)*36;ang=0;}
+            drawVehicle(ctx,x,y,ang, i===0&&count>5?'truck':'car');
         }
     }
-
-    async function startEmergencySegment(){
-        const e=networkState?.emergency;
-        if(!e?.active || !e.route?.length) return false;
-        const idx=Number(e.route_index||0);
-        if(idx>=e.route.length-1){stopEmergencyAuto();return false;}
-        emergencyMoveFrom=e.route[idx];
-        emergencyMoveTo=e.route[idx+1];
-        const serverSeconds=Number(networkState.emergency_segment_time_seconds||60);
-        const speed=Number(document.getElementById("network-sim-speed")?.value||8);
-        emergencyMoveDuration=Math.max(1200,(serverSeconds*1000)/Math.max(1,speed));
-        emergencyMoveStarted=performance.now();
-        const moveToken=++emergencyMoveToken;
-        setTimeout(async()=>{
-            if(moveToken!==emergencyMoveToken) return;
-            try{
-                const res=await fetch("/api/emergency/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({current_junction:emergencyMoveTo})});
-                const data=await res.json();
-                if(data.status!=="success") throw new Error(data.message||"Emergency movement failed");
-                networkState={...(networkState||{}),emergency:data.emergency,junction_status:data.junction_status,emergency_eta_seconds:data.estimated_time_seconds,emergency_next_junction:data.next_junction,emergency_segment_time_seconds:data.segment_time_seconds};
-                emergencySnapshot=data; emergencyRoute=data.emergency?.route||[];
-                emergencyMoveFrom=null;emergencyMoveTo=null;
-                renderNetworkDashboard(networkState);
-                if(data.emergency?.status==="AT DESTINATION") stopEmergencyAuto();
-                else if(emergencyAutoTimer) startEmergencySegment();
-            }catch(err){console.error(err);stopEmergencyAuto();alert(err.message);}
-        },emergencyMoveDuration);
-        return true;
+    function edgeInboundDirection(from,to){
+        const a=nodePos[from],b=nodePos[to];
+        if(b.x>a.x)return 'West';
+        if(b.x<a.x)return 'East';
+        if(b.y>a.y)return 'North';
+        return 'South';
+    }
+    function drawEdgeTraffic(ctx,a,b,dataA,dataB,now){
+        const pa=nodePos[a],pb=nodePos[b];const horizontal=pa.y===pb.y;
+        const len=horizontal?Math.abs(pb.x-pa.x):Math.abs(pb.y-pa.y);
+        const avgSpeed=Math.max(3,(Number(dataA.average_speed)+Number(dataB.average_speed))/2);
+        const count=Math.min(9,Math.max(2,Math.round((dataA.vehicle_count+dataB.vehicle_count)/25)));
+        const t=now/1000;
+        for(let i=0;i<count;i++){
+            for(let dirSign=0;dirSign<2;dirSign++){
+                const from=dirSign===0?a:b,to=dirSign===0?b:a,fromP=dirSign===0?pa:pb,toP=dirSign===0?pb:pa;
+                let prog=((t*(avgSpeed/3.6)*0.50/len)+(i*0.12)+dirSign*0.46)%1;
+                const dstSignal=(networkState.junctions[String(to)]?.signal?.signals||{})[edgeInboundDirection(from,to)]||'RED';
+                if(dstSignal!=='GREEN') prog=Math.min(prog,0.82-i*0.035);
+                const x=fromP.x+(toP.x-fromP.x)*prog;
+                const y=fromP.y+(toP.y-fromP.y)*prog + (horizontal?(dirSign===0?-18:18):(dirSign===0?18:-18));
+                const ang=Math.atan2(toP.y-fromP.y,toP.x-fromP.x);
+                drawVehicle(ctx,x,y,ang,'car',false);
+            }
+        }
+    }
+    function drawAmbulance(ctx,e,now){
+        if(!e?.active||!e.route?.length)return;
+        const idx=Number(e.route_index||0);if(idx>=e.route.length-1){const p=nodePos[e.current_junction];drawVehicle(ctx,p.x,p.y,0,'car',true);drawAmbulanceLabel(ctx,p.x,p.y-62,`AMB ${e.ambulance_id}`);return;}
+        const from=nodePos[e.route[idx]],to=nodePos[e.route[idx+1]];const p=clamp(Number(e.segment_progress||0),0,.99);const x=from.x+(to.x-from.x)*p,y=from.y+(to.y-from.y)*p;const angle=Math.atan2(to.y-from.y,to.x-from.x);drawVehicle(ctx,x,y,angle,'car',true);drawAmbulanceLabel(ctx,x,y-35,`${e.ambulance_id} • ${e.emergency_level}`);
+    }
+    function drawAmbulanceLabel(ctx,x,y,text){ctx.save();ctx.font='800 9px Segoe UI';const w=ctx.measureText(text).width+16;ctx.fillStyle='rgba(255,62,165,.17)';ctx.strokeStyle='rgba(255,62,165,.7)';ctx.roundRect(x-w/2,y-12,w,21,6);ctx.fill();ctx.stroke();ctx.fillStyle='#ffb7dc';ctx.textAlign='center';ctx.fillText(text,x,y+2);ctx.restore();}
+    function drawRoute(ctx,e){if(!e?.active||!e.route?.length)return;ctx.save();ctx.lineWidth=6;ctx.setLineDash([14,10]);ctx.strokeStyle='#ff3ea5';ctx.shadowBlur=15;ctx.shadowColor='rgba(255,62,165,.55)';ctx.beginPath();for(let i=0;i<e.route.length;i++){const p=nodePos[e.route[i]];if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);}ctx.stroke();ctx.setLineDash([]);ctx.restore();}
+    function drawRealNetwork(now){
+        if(!emergencyCtx||!networkState)return;const ctx=emergencyCtx;const W=emergencyCanvas.clientWidth,H=emergencyCanvas.clientHeight;ctx.clearRect(0,0,W,H);
+        ctx.fillStyle='#071126';ctx.fillRect(0,0,W,H);ctx.strokeStyle='rgba(78,98,133,.14)';ctx.lineWidth=1;for(let x=0;x<W;x+=32){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}for(let y=0;y<H;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+        [1,2,3,4].forEach(j=>dirs.forEach(d=>drawApproach(ctx,j,d)));edges.forEach(([a,b])=>drawRoad(ctx,a,b));
+        // outer approach traffic makes the network feel continuous rather than four isolated boxes
+        [1,2,3,4].forEach(j=>{const v=networkState.junctions[String(j)];dirs.forEach(d=>drawApproachVehicles(ctx,j,d,v,now));});
+        edges.forEach(([a,b])=>drawEdgeTraffic(ctx,a,b,networkState.junctions[String(a)],networkState.junctions[String(b)],now));
+        drawRoute(ctx,networkState.emergency);[1,2,3,4].forEach(j=>drawJunction(ctx,j,networkState.junctions[String(j)]));drawAmbulance(ctx,networkState.emergency,now);
+        const clock=document.getElementById('network-clock');if(clock)clock.textContent=`FRAME ${Number(networkState.frame_index)+1} • ${networkState.junctions['1'].time_of_day||''}`;
     }
 
-    function stopEmergencyAuto(){
-        emergencyMoveToken++;
-        if(emergencyAutoTimer) clearTimeout(emergencyAutoTimer);
-        emergencyAutoTimer=null;
-        const b=document.getElementById("emergency-auto-btn");
-        if(b)b.innerHTML=`<i class="fa-solid fa-play"></i> Start Auto Movement`;
+    function scheduleFrameReplay(){
+        if(frameTimer)clearTimeout(frameTimer);
+        const speed=Math.max(.25,Number(document.getElementById("network-sim-speed")?.value||4));
+        frameTimer=setTimeout(()=>{if(replayRunning&&networkState){replayFrame=(Number(networkState.frame_index)+1)%Math.max(1,Number(networkState.frame_count||1));refreshNetworkState();}scheduleFrameReplay();},Math.max(500,2500/speed));
     }
-
-    async function advanceEmergency(){
-        if(!networkState?.emergency?.active) return;
-        stopEmergencyAuto();
-        await startEmergencySegment();
-    }
-
-    document.getElementById("emergency-auto-btn")?.addEventListener("click",async()=>{
-        if(emergencyAutoTimer){stopEmergencyAuto();return;}
-        if(!networkState?.emergency?.active)return;
-        emergencyAutoTimer=true;
-        document.getElementById("emergency-auto-btn").innerHTML=`<i class="fa-solid fa-pause"></i> Pause Auto Movement`;
-        const started=await startEmergencySegment();
-        if(!started) stopEmergencyAuto();
-    });
-    document.getElementById("emergency-next-btn")?.addEventListener("click",()=>advanceEmergency());
-    document.getElementById("emergency-clear-btn")?.addEventListener("click",async()=>{
-        stopEmergencyAuto();
-        try{const res=await fetch("/api/emergency/clear",{method:"POST"});const data=await res.json();if(data.status!=="success")throw new Error(data.message||"Clear failed");emergencyMoveFrom=null;emergencyMoveTo=null;await refreshNetworkState();}catch(err){alert(err.message);}
-    });
-
-    // Ambulance Dashboard
-    async function loadAmbulanceDashboard(){
-        try{await refreshNetworkState();}catch(e){console.error(e);}
-    }
-
-    function renderAmbulancePlan(data){
-        const empty=document.getElementById("ambulance-route-empty");const result=document.getElementById("ambulance-route-result");
-        if(!result||!empty)return;
-        empty.classList.add("hidden");result.classList.remove("hidden");
-        document.getElementById("ambulance-route-text").innerText=(data.route||[]).map(junctionLabel).join(" → ");
-        document.getElementById("ambulance-route-time").innerText=formatSeconds(data.estimated_time_seconds);
-        const vals=Object.values(data.congestion||{}).map(Number);const avg=vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:0;
-        document.getElementById("ambulance-route-congestion").innerText=`${avg.toFixed(0)}% network avg`;
-        const steps=document.getElementById("ambulance-route-steps");
-        steps.innerHTML=(data.route||[]).map((j,i)=>`<div class="route-step ${i===0?'active':''}"><span class="step-index">${i+1}</span><strong>${junctionLabel(j)}</strong><span>${i===0?'CURRENT':i===data.route.length-1?'DESTINATION':'CORRIDOR'}</span><em>${i===0?'START':'STEP '+i}</em></div>`).join("");
-    }
-
-    document.getElementById("ambulance-plan-btn")?.addEventListener("click",async()=>{
-        const start=Number(document.getElementById("ambulance-current").value),dest=Number(document.getElementById("ambulance-destination").value);
-        if(start===dest){alert("Current Junction and Destination Junction must be different.");return;}
-        const b=document.getElementById("ambulance-plan-btn");b.disabled=true;
-        try{
-            const res=await fetch("/api/emergency/plan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({current_junction:start,destination:dest})});
-            const data=await res.json();if(!res.ok||data.status!=="success")throw new Error(data.message||"Route planning failed");renderAmbulancePlan(data);
-        }catch(err){alert(err.message);}finally{b.disabled=false;}
-    });
-
-    document.getElementById("ambulance-form")?.addEventListener("submit",async(e)=>{
-        e.preventDefault();
-        const start=Number(document.getElementById("ambulance-current").value),dest=Number(document.getElementById("ambulance-destination").value);
-        if(start===dest){alert("Current Junction and Destination Junction must be different.");return;}
-        const b=document.getElementById("ambulance-activate-btn");b.disabled=true;
-        try{
-            const res=await fetch("/api/emergency/activate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ambulance_id:document.getElementById("ambulance-id").value,current_junction:start,destination:dest,emergency_level:document.getElementById("ambulance-level").value})});
-            const data=await res.json();if(!res.ok||data.status!=="success")throw new Error(data.message||"Emergency activation failed");
-            renderAmbulancePlan(data);
-            document.getElementById("ambulance-dashboard-status").innerHTML='<span class="status-dot-mini"></span>ACTIVE';
-            // Move operator directly to the live control centre.
-            document.querySelector('.nav-item[data-view="emergency"]')?.click();
-            networkState={...(networkState||{}),emergency:data.emergency,junction_status:data.junction_status,emergency_eta_seconds:data.estimated_time_seconds,emergency_next_junction:data.next_junction,emergency_segment_time_seconds:data.segment_time_seconds};
-            emergencyRoute=data.emergency.route||[];
-            emergencyMoveFrom=null;emergencyMoveTo=null;
-            renderNetworkDashboard(networkState);
-            stopEmergencyAuto();
-            emergencyAutoTimer=true;
-            document.getElementById("emergency-auto-btn").innerHTML=`<i class="fa-solid fa-pause"></i> Pause Auto Movement`;
-            setTimeout(()=>startEmergencySegment(),300);
-        }catch(err){alert(err.message);}finally{b.disabled=false;}
-    });
-
-    document.getElementById("ambulance-open-network")?.addEventListener("click",()=>document.querySelector('.nav-item[data-view="emergency"]')?.click());
+    document.getElementById("network-frame")?.addEventListener("change",e=>{replayFrame=Math.max(0,Number(e.target.value||0));refreshNetworkState();});
+    document.getElementById("network-sim-speed")?.addEventListener("change",()=>scheduleFrameReplay());
     document.getElementById("network-refresh-btn")?.addEventListener("click",()=>refreshNetworkState());
+    document.getElementById("network-pause-btn")?.addEventListener("click",e=>{replayRunning=!replayRunning;e.currentTarget.innerHTML=replayRunning?'<i class="fa-solid fa-pause"></i> Pause Replay':'<i class="fa-solid fa-play"></i> Resume Replay';scheduleFrameReplay();});
     window.addEventListener("resize",()=>resizeEmergencyCanvas());
+    document.getElementById("emergency-clear-btn")?.addEventListener("click",async()=>{
+        if(emergencyClearBusy)return;emergencyClearBusy=true;try{const r=await fetch('/api/emergency/clear',{method:'POST'});const d=await r.json();if(!r.ok||d.status!=='success')throw new Error(d.message||'Failed to clear emergency');await refreshNetworkState();}catch(e){alert(e.message);}finally{emergencyClearBusy=false;}
+    });
 
     // 6. REPORTS WITH DYNAMIC JUNCTION SELECTION
     async function loadReports(junctionId = "all") {
