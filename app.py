@@ -402,10 +402,51 @@ CREATE TABLE IF NOT EXISTS emergency_requests (
 """
 
 
+# Idempotent schema migration. Earlier project versions created emergency_requests
+# without all fields used by the current controller (notably segment_seconds).
+# This migration upgrades an existing table without deleting emergency history.
+_EMERGENCY_SCHEMA_READY = False
+_EMERGENCY_SCHEMA_LOCK = None
+
 def ensure_emergency_table(conn):
-    with conn.cursor() as cursor:
-        cursor.execute(EMERGENCY_TABLE_SQL)
-    conn.commit()
+    global _EMERGENCY_SCHEMA_READY, _EMERGENCY_SCHEMA_LOCK
+    import threading
+    if _EMERGENCY_SCHEMA_READY:
+        return
+    if _EMERGENCY_SCHEMA_LOCK is None:
+        _EMERGENCY_SCHEMA_LOCK = threading.Lock()
+    with _EMERGENCY_SCHEMA_LOCK:
+        if _EMERGENCY_SCHEMA_READY:
+            return
+        with conn.cursor() as cursor:
+            cursor.execute(EMERGENCY_TABLE_SQL)
+            cursor.execute("""
+                SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA=%s AND TABLE_NAME='emergency_requests'
+            """, (DB_NAME,))
+            existing = {row['COLUMN_NAME'] for row in cursor.fetchall()}
+            migrations = {
+                'ambulance_id': "ALTER TABLE emergency_requests ADD COLUMN ambulance_id VARCHAR(64) NULL",
+                'current_junction': "ALTER TABLE emergency_requests ADD COLUMN current_junction INT NULL",
+                'destination': "ALTER TABLE emergency_requests ADD COLUMN destination INT NULL",
+                'emergency_level': "ALTER TABLE emergency_requests ADD COLUMN emergency_level VARCHAR(20) NULL",
+                'route_json': "ALTER TABLE emergency_requests ADD COLUMN route_json TEXT NULL",
+                'route_cost_seconds': "ALTER TABLE emergency_requests ADD COLUMN route_cost_seconds DOUBLE NOT NULL DEFAULT 0",
+                'route_index': "ALTER TABLE emergency_requests ADD COLUMN route_index INT NOT NULL DEFAULT 0",
+                'segment_seconds': "ALTER TABLE emergency_requests ADD COLUMN segment_seconds DOUBLE NOT NULL DEFAULT 0",
+                'segment_started_at': "ALTER TABLE emergency_requests ADD COLUMN segment_started_at DATETIME NULL",
+                'status': "ALTER TABLE emergency_requests ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'CLEARED'",
+                'started_at': "ALTER TABLE emergency_requests ADD COLUMN started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                'updated_at': "ALTER TABLE emergency_requests ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            }
+            for name, sql in migrations.items():
+                if name not in existing:
+                    cursor.execute(sql)
+            # Backfill any NULL route indexes/timing values in old rows.
+            cursor.execute("UPDATE emergency_requests SET route_index=0 WHERE route_index IS NULL")
+            cursor.execute("UPDATE emergency_requests SET segment_seconds=0 WHERE segment_seconds IS NULL")
+        conn.commit()
+        _EMERGENCY_SCHEMA_READY = True
 
 
 def db_now():
@@ -844,11 +885,72 @@ def emergency_activate():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+def _emergency_status_only():
+    """Lightweight emergency-only read for the control-center poll.
+    It deliberately avoids loading the four-junction traffic frame, so the
+    animation is not blocked by repeated database scans."""
+    conn = get_db_connection()
+    try:
+        ensure_emergency_table(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, ambulance_id, current_junction, destination,
+                       emergency_level, route_json, route_cost_seconds,
+                       route_index, segment_seconds, segment_started_at, status
+                FROM emergency_requests
+                WHERE status IN ('ACTIVE','AT DESTINATION')
+                ORDER BY id DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return {"active": False, "status": "NORMAL", "route": [], "route_index": 0}
+
+    route = [int(x) for x in json.loads(row["route_json"] or "[]")]
+    idx = int(row["route_index"] or 0)
+    segment_seconds = float(row["segment_seconds"] or 0)
+    progress = 1.0
+    if row["status"] == "ACTIVE" and idx < len(route) - 1 and segment_seconds > 0 and row.get("segment_started_at"):
+        started_value = row["segment_started_at"]
+        if hasattr(started_value, "timestamp"):
+            elapsed = max(0.0, datetime.now(timezone.utc).timestamp() - started_value.replace(tzinfo=timezone.utc).timestamp())
+        else:
+            started = datetime.strptime(str(started_value), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            elapsed = max(0.0, datetime.now(timezone.utc).timestamp() - started.timestamp())
+        progress = min(0.99, elapsed / segment_seconds)
+
+    next_j = route[idx + 1] if idx + 1 < len(route) else None
+    total_route_cost = float(row["route_cost_seconds"] or 0)
+    if idx < len(route) - 1:
+        # Use the stored route cost as a stable ETA approximation between
+        # full traffic-frame refreshes. The detailed ETA is refreshed with
+        # the normal network frame update.
+        eta = max(0.0, total_route_cost - (idx * segment_seconds) - (progress * segment_seconds))
+    else:
+        eta = 0.0
+    return {
+        "active": True,
+        "request_id": int(row["id"]),
+        "ambulance_id": row["ambulance_id"],
+        "current_junction": int(row["current_junction"]),
+        "destination": int(row["destination"]),
+        "emergency_level": row["emergency_level"],
+        "route": route,
+        "route_index": idx,
+        "next_junction": next_j,
+        "status": row["status"],
+        "segment_seconds": round(segment_seconds, 1),
+        "segment_progress": round(progress, 3),
+        "estimated_time_seconds": round(eta, 1),
+        "source": "emergency_requests",
+    }
+
 @app.route("/api/emergency/status")
 def emergency_status_api():
     try:
-        frame = int(request.args.get("frame", 0))
-        return jsonify(_network_payload(frame)["emergency"])
+        return jsonify(_emergency_status_only())
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
