@@ -68,6 +68,10 @@ def health():
         conn=get_db_connection(); conn.close(); return jsonify({'status':'ok','database':'reachable'})
     except Exception as e:return jsonify({'status':'error','database':'unreachable','message':str(e)}),500
 
+@app.route('/healthz')
+def healthz():
+    return jsonify({'status':'ok','service':'ambulance-dispatch'})
+
 if __name__=='__main__':
     import os
     app.run(host='0.0.0.0',port=int(os.environ.get('PORT',5050)),debug=False)
