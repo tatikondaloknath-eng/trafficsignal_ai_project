@@ -26,7 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const currentSimJ = document.getElementById("sim-junction-select")?.value || 1;
                 loadSimJunctionConfig(currentSimJ);
             }
-            if (targetView === "emergency") { resizeEmergencyCanvas(); startNetworkLoop(); refreshNetworkState(); }
+            if (targetView === "emergency") { resizeEmergencyCanvas(); startNetworkLoop(); refreshNetworkState(); initializeEmergencyReview(); }
         });
     });
 
@@ -1236,6 +1236,92 @@ document.addEventListener("DOMContentLoaded", () => {
         resizeEmergencyCanvas();
         rebuildCorridors();
         for(const v of sim.vehicles.values()) v.rt=corridorRuntime[v.corridor];
+    });
+
+    // Emergency evidence review lives on this existing Traffic Control website.
+    let reviewAuthenticated = false;
+    let reviewPollTimer = null;
+    const reviewEsc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    async function reviewApi(url, options={}) {
+        const response = await fetch(url, {...options, cache:'no-store', credentials:'same-origin', headers:{...(options.headers||{}), ...(options.body instanceof FormData ? {} : {'Content-Type':'application/json'})}});
+        const data = response.headers.get('content-type')?.includes('application/json') ? await response.json() : {};
+        if (!response.ok || data.status === 'error') throw new Error(data.message || `Request failed (${response.status})`);
+        return data;
+    }
+    function setReviewMessage(message, isError=false) {
+        const el=document.getElementById('review-auth-message'); if(!el)return;
+        el.textContent=message; el.classList.toggle('review-error',isError); el.classList.toggle('review-ok',!isError);
+    }
+    function setReviewAuth(authenticated) {
+        reviewAuthenticated=!!authenticated;
+        document.getElementById('review-login-panel')?.classList.toggle('hidden',reviewAuthenticated);
+        document.getElementById('review-workspace')?.classList.toggle('hidden',!reviewAuthenticated);
+        const pill=document.getElementById('review-state-pill');if(pill){pill.textContent=reviewAuthenticated?'UNLOCKED':'LOCKED';pill.classList.toggle('review-ok',reviewAuthenticated)}
+        if(reviewAuthenticated) refreshReviewQueue();
+        else { if(reviewPollTimer){clearInterval(reviewPollTimer);reviewPollTimer=null;} }
+    }
+    async function initializeEmergencyReview(){
+        try { const s=await reviewApi('/api/emergency/review/session');
+            if(!s.pin_configured){setReviewMessage('Secure review is disabled until EMERGENCY_REVIEW_PIN is set in the main Traffic Control Render service.',true);}
+            setReviewAuth(!!s.authenticated);
+            if(s.authenticated && !reviewPollTimer) reviewPollTimer=setInterval(refreshReviewQueue,5000);
+        } catch(e){setReviewMessage(e.message,true)}
+    }
+    async function unlockEmergencyReview(){
+        const pin=document.getElementById('review-pin')?.value||'';
+        try{await reviewApi('/api/emergency/review/login',{method:'POST',body:JSON.stringify({pin})});document.getElementById('review-pin').value='';setReviewMessage('Review panel unlocked.');setReviewAuth(true);if(!reviewPollTimer)reviewPollTimer=setInterval(refreshReviewQueue,5000);}
+        catch(e){setReviewMessage(e.message,true)}
+    }
+    async function lockEmergencyReview(){
+        try{await reviewApi('/api/emergency/review/logout',{method:'POST',body:JSON.stringify({})})}catch(e){console.warn(e)}
+        setReviewAuth(false);const q=document.getElementById('review-queue');if(q)q.innerHTML='<div class="empty-state">Unlock the review panel to view submitted evidence.</div>';
+    }
+    async function refreshReviewQueue(){
+        if(!reviewAuthenticated)return;
+        const box=document.getElementById('review-queue');if(!box)return;
+        try{
+            const d=await reviewApi('/api/emergency/review/pending');
+            if(!d.requests?.length){box.innerHTML='<div class="empty-state">No emergency requests are awaiting review. Any newly submitted photo will appear here automatically.</div>';return;}
+            box.innerHTML=d.requests.map(r=>{
+                const loc=(r.latitude!=null&&r.longitude!=null)?`Phone location metadata: ${Number(r.latitude).toFixed(5)}, ${Number(r.longitude).toFixed(5)} (±${r.location_accuracy==null?'unknown':Math.round(Number(r.location_accuracy))+' m'}).`:'Phone location was not shared; photo evidence is still visible.';
+                const route=(r.route||[]).map(j=>`J${j}`).join(' → ');
+                return `<article class="review-request-card" data-review-id="${Number(r.request_id)}">
+                    <div class="review-photo-wrap"><img class="review-photo" src="${reviewEsc(r.photo_url)}?t=${encodeURIComponent(r.photo_sha256_short||'') }" alt="Evidence photo for request ${Number(r.request_id)}" loading="lazy"></div>
+                    <div class="review-request-content">
+                      <div class="review-request-head"><div><h4>Request #${Number(r.request_id)} · ${reviewEsc(r.ambulance_id)}</h4><div class="small-muted">Submitted ${reviewEsc(r.received_at||'—')}</div></div><span class="review-priority">${reviewEsc(r.emergency_level)}</span></div>
+                      <div class="review-details">
+                        <div class="review-detail"><span>Reported current junction</span><strong>J${Number(r.current_junction)}</strong></div>
+                        <div class="review-detail"><span>Destination</span><strong>J${Number(r.destination)}</strong></div>
+                        <div class="review-detail"><span>A* route proposal</span><strong>${reviewEsc(route)}</strong></div>
+                        <div class="review-detail"><span>Photo captured</span><strong>${reviewEsc(r.captured_at||'—')}</strong></div>
+                      </div>
+                      <div class="review-location">${reviewEsc(loc)}</div>
+                      <div class="review-hash">Evidence SHA-256: ${reviewEsc(r.photo_sha256||'—')}</div>
+                      <div class="review-review-warning">Review the evidence and request details. A photo and timestamp are supporting evidence; they do not automatically prove patient presence or medical severity.</div>
+                      <div class="review-actions"><button type="button" class="btn btn-success review-approve-btn" data-id="${Number(r.request_id)}"><i class="fa-solid fa-check"></i> Approve & Activate</button><button type="button" class="btn btn-danger review-reject-btn" data-id="${Number(r.request_id)}"><i class="fa-solid fa-xmark"></i> Reject</button></div>
+                    </div></article>`;
+            }).join('');
+        }catch(e){ if(e.message.includes('reviewer PIN')){setReviewAuth(false);setReviewMessage(e.message,true)} else box.innerHTML=`<div class="empty-state review-error">Could not load review queue: ${reviewEsc(e.message)}</div>`; }
+    }
+    async function decideEmergencyReview(id, decision){
+        const action=decision==='approve'?'approve':'reject';
+        const promptText=decision==='approve'?'Approve this evidence-backed request and activate the corridor?':'Reject this emergency request? It will not activate a corridor.';
+        if(!window.confirm(promptText))return;
+        try{
+            const result=await reviewApi(`/api/emergency/review/${Number(id)}/${action}`,{method:'POST',body:JSON.stringify({note:decision==='approve'?'Approved after evidence review.':'Rejected after evidence review.'})});
+            setReviewMessage(result.message||'Review decision saved.');
+            await refreshReviewQueue();
+            if(decision==='approve'){await refreshNetworkState();}
+        }catch(e){window.alert(e.message);await refreshReviewQueue()}
+    }
+    document.getElementById('review-login-btn')?.addEventListener('click',unlockEmergencyReview);
+    document.getElementById('review-pin')?.addEventListener('keydown',e=>{if(e.key==='Enter')unlockEmergencyReview()});
+    document.getElementById('review-refresh-btn')?.addEventListener('click',refreshReviewQueue);
+    document.getElementById('review-logout-btn')?.addEventListener('click',lockEmergencyReview);
+    document.getElementById('review-queue')?.addEventListener('click',e=>{
+        const approve=e.target.closest('.review-approve-btn'); const reject=e.target.closest('.review-reject-btn');
+        if(approve)decideEmergencyReview(approve.dataset.id,'approve');
+        if(reject)decideEmergencyReview(reject.dataset.id,'reject');
     });
 
     document.getElementById("emergency-clear-btn")?.addEventListener("click",async()=>{
