@@ -3,8 +3,9 @@ import socket
 import json
 import math
 import time
+import hmac
 import pymysql
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, session, Response
 
 # IPv6 fallback workaround for Aiven MySQL
 _original_getaddrinfo = socket.getaddrinfo
@@ -18,6 +19,12 @@ def ipv6_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
 socket.getaddrinfo = ipv6_only_getaddrinfo
 
 app = Flask(__name__)
+app.config.update(
+    SECRET_KEY=os.environ.get('SESSION_SECRET') or os.urandom(32),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Strict',
+    SESSION_COOKIE_SECURE=True,
+)
 
 # Database Configuration
 DB_HOST = os.environ.get("DB_HOST", "localhost")
@@ -396,6 +403,9 @@ CREATE TABLE IF NOT EXISTS emergency_requests (
     status VARCHAR(32) NOT NULL,
     started_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
+    reviewed_by VARCHAR(80) NULL,
+    reviewed_at DATETIME NULL,
+    review_note VARCHAR(500) NULL,
     INDEX idx_emergency_status (status),
     INDEX idx_emergency_updated (updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -438,6 +448,9 @@ def ensure_emergency_table(conn):
                 'status': "ALTER TABLE emergency_requests ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'CLEARED'",
                 'started_at': "ALTER TABLE emergency_requests ADD COLUMN started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
                 'updated_at': "ALTER TABLE emergency_requests ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                'reviewed_by': "ALTER TABLE emergency_requests ADD COLUMN reviewed_by VARCHAR(80) NULL",
+                'reviewed_at': "ALTER TABLE emergency_requests ADD COLUMN reviewed_at DATETIME NULL",
+                'review_note': "ALTER TABLE emergency_requests ADD COLUMN review_note VARCHAR(500) NULL",
             }
             for name, sql in migrations.items():
                 if name not in existing:
@@ -834,55 +847,204 @@ def emergency_plan():
 
 @app.route("/api/emergency/activate", methods=["POST"])
 def emergency_activate():
-    try:
-        data = request.get_json(silent=True) or {}
-        ambulance_id = str(data.get("ambulance_id", "AMB-001")).strip()[:64]
-        start = int(data.get("current_junction"))
-        goal = int(data.get("destination"))
-        level = str(data.get("emergency_level", "CRITICAL")).upper()
-        if not ambulance_id:
-            return jsonify({"status": "error", "message": "Ambulance ID is required."}), 400
-        if start == goal:
-            return jsonify({"status": "error", "message": "Current junction and destination must be different."}), 400
-        if start not in NETWORK_GRAPH or goal not in NETWORK_GRAPH:
-            return jsonify({"status": "error", "message": "Junction must be between 1 and 4."}), 400
+    # Prevent a browser/API caller from bypassing photo submission and the main-site review step.
+    return jsonify({
+        "status": "error",
+        "message": "Direct activation is disabled. Submit live photo evidence from Ambulance Dispatch, then approve the request in the Traffic Control Center review panel."
+    }), 403
 
-        frame = int(data.get("frame", 0))
-        _, _, rows = _fetch_network_frame(frame)
-        congestion = {j: _congestion_score(rows[j]) for j in range(1, 5)}
-        route, cost, segments = astar_route(start, goal, congestion, rows)
-        now = db_now()
-        first_segment = segments[0]["seconds"] if segments else 0
-        conn = get_db_connection()
-        try:
-            ensure_emergency_table(conn)
-            with conn.cursor() as cursor:
-                cursor.execute("UPDATE emergency_requests SET status='CLEARED', updated_at=%s WHERE status IN ('ACTIVE','AT DESTINATION')", (now,))
-                cursor.execute("""
-                    INSERT INTO emergency_requests
-                    (ambulance_id, current_junction, destination, emergency_level,
-                     route_json, route_cost_seconds, route_index, segment_seconds,
-                     segment_started_at, status, started_at, updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'ACTIVE',%s,%s)
-                """, (
-                    ambulance_id, start, goal, level, json.dumps(route), cost, 0,
-                    first_segment, now, now, now
-                ))
-            conn.commit()
-        finally:
-            conn.close()
-        return jsonify({
-            "status": "success",
-            "message": "Emergency corridor activated.",
-            "algorithm": "A* Emergency Route Planning",
-            "route": route,
-            "estimated_time_seconds": cost,
-            "segments": segments,
-            "congestion": congestion,
-            "emergency": _network_payload(frame)["emergency"],
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+def _ensure_verification_evidence_table(conn):
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS emergency_verification_evidence (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                request_id BIGINT NOT NULL,
+                ambulance_id VARCHAR(64) NOT NULL,
+                challenge_id VARCHAR(64) NOT NULL,
+                challenge_code VARCHAR(12) NOT NULL,
+                captured_at DATETIME NOT NULL,
+                received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                photo_sha256 CHAR(64) NOT NULL,
+                photo_mime VARCHAR(40) NOT NULL,
+                photo_blob MEDIUMBLOB NOT NULL,
+                latitude DOUBLE NULL,
+                longitude DOUBLE NULL,
+                location_accuracy DOUBLE NULL,
+                privacy_ack TINYINT NOT NULL DEFAULT 0,
+                UNIQUE KEY uq_emergency_evidence_challenge (challenge_id),
+                INDEX idx_emergency_evidence_request (request_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+    conn.commit()
+
+
+def _reviewer_logged_in():
+    return session.get('emergency_reviewer') is True
+
+
+def _reviewer_required_response():
+    if not _reviewer_logged_in():
+        return jsonify({"status": "error", "message": "Unlock the emergency review panel with the Traffic Control reviewer PIN first."}), 401
+    return None
+
+
+@app.route('/api/emergency/review/session')
+def emergency_review_session():
+    return jsonify({"authenticated": _reviewer_logged_in(), "pin_configured": bool(os.environ.get('EMERGENCY_REVIEW_PIN'))})
+
+
+@app.route('/api/emergency/review/login', methods=['POST'])
+def emergency_review_login():
+    expected = os.environ.get('EMERGENCY_REVIEW_PIN', '')
+    if not expected:
+        return jsonify({"status": "error", "message": "Set EMERGENCY_REVIEW_PIN in the main Traffic Control Render service environment before using the review panel."}), 503
+    supplied = str((request.get_json(silent=True) or {}).get('pin', ''))
+    if not hmac.compare_digest(supplied, expected):
+        time.sleep(0.25)
+        return jsonify({"status": "error", "message": "Reviewer PIN is incorrect."}), 401
+    session.clear()
+    session['emergency_reviewer'] = True
+    session['reviewer_name'] = 'traffic-control-operator'
+    session.permanent = False
+    return jsonify({"status": "success", "message": "Review panel unlocked."})
+
+
+@app.route('/api/emergency/review/logout', methods=['POST'])
+def emergency_review_logout():
+    session.clear()
+    return jsonify({"status": "success", "message": "Review panel locked."})
+
+
+@app.route('/api/emergency/review/pending')
+def emergency_review_pending():
+    required = _reviewer_required_response()
+    if required: return required
+    conn = get_db_connection()
+    try:
+        ensure_emergency_table(conn)
+        _ensure_verification_evidence_table(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT r.id AS request_id, r.ambulance_id, r.current_junction, r.destination,
+                       r.emergency_level, r.route_json, r.route_cost_seconds, r.started_at,
+                       e.captured_at, e.received_at, e.photo_sha256, e.photo_mime,
+                       e.latitude, e.longitude, e.location_accuracy
+                FROM emergency_requests r
+                JOIN emergency_verification_evidence e ON e.request_id=r.id
+                WHERE r.status='PENDING_REVIEW'
+                ORDER BY r.id ASC LIMIT 25
+            """)
+            rows = cursor.fetchall()
+        for row in rows:
+            row['route'] = [int(v) for v in json.loads(row.pop('route_json') or '[]')]
+            for key in ('captured_at', 'received_at', 'started_at'):
+                if row.get(key) is not None: row[key] = str(row[key])
+            row['photo_sha256_short'] = str(row.get('photo_sha256') or '')[:16]
+            row['photo_url'] = f"/api/emergency/review/{int(row['request_id'])}/photo"
+        return jsonify({"status": "success", "requests": rows})
+    except Exception as exc:
+        app.logger.exception('Unable to load emergency review queue')
+        return jsonify({"status": "error", "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/emergency/review/<int:request_id>/photo')
+def emergency_review_photo(request_id):
+    required = _reviewer_required_response()
+    if required: return required
+    conn = get_db_connection()
+    try:
+        ensure_emergency_table(conn)
+        _ensure_verification_evidence_table(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT e.photo_blob, e.photo_mime
+                FROM emergency_verification_evidence e
+                JOIN emergency_requests r ON r.id=e.request_id
+                WHERE e.request_id=%s AND r.status IN ('PENDING_REVIEW','ACTIVE','AT DESTINATION','REJECTED')
+                ORDER BY e.id DESC LIMIT 1
+            """, (request_id,))
+            row = cursor.fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "Evidence not found for this request."}), 404
+        response = Response(row['photo_blob'], mimetype=row['photo_mime'])
+        response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    except Exception as exc:
+        app.logger.exception('Unable to load emergency photo evidence')
+        return jsonify({"status": "error", "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/emergency/review/<int:request_id>/approve', methods=['POST'])
+def emergency_review_approve(request_id):
+    required = _reviewer_required_response()
+    if required: return required
+    now = db_now()
+    conn = get_db_connection()
+    try:
+        ensure_emergency_table(conn)
+        _ensure_verification_evidence_table(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM emergency_requests WHERE status IN ('ACTIVE','AT DESTINATION') LIMIT 1 FOR UPDATE")
+            active = cursor.fetchone()
+            if active:
+                return jsonify({"status": "error", "message": "Another emergency corridor is already active. Clear or complete it before approving this request."}), 409
+            cursor.execute("SELECT * FROM emergency_requests WHERE id=%s FOR UPDATE", (request_id,))
+            row = cursor.fetchone()
+            if not row: return jsonify({"status": "error", "message": "Emergency request was not found."}), 404
+            if row['status'] != 'PENDING_REVIEW':
+                return jsonify({"status": "error", "message": f"Request is not pending review (status: {row['status']})."}), 409
+            cursor.execute("SELECT id FROM emergency_verification_evidence WHERE request_id=%s LIMIT 1", (request_id,))
+            if not cursor.fetchone(): return jsonify({"status": "error", "message": "Photo evidence is missing; activation is blocked."}), 409
+            route = [int(v) for v in json.loads(row['route_json'] or '[]')]
+            if len(route) < 2: return jsonify({"status": "error", "message": "Stored route is invalid."}), 409
+            cursor.execute("""UPDATE emergency_requests SET status='ACTIVE', route_index=0,
+                segment_started_at=%s, started_at=%s, updated_at=%s, reviewed_by=%s,
+                reviewed_at=%s, review_note=%s WHERE id=%s AND status='PENDING_REVIEW'""",
+                (now, now, now, session.get('reviewer_name','traffic-control-operator'), now,
+                 'Approved after photo evidence review in main Traffic Control Center.', request_id))
+            if cursor.rowcount != 1: return jsonify({"status": "error", "message": "Request changed during review. Refresh and retry."}), 409
+        conn.commit()
+        return jsonify({"status": "success", "message": "Verified request approved. Emergency corridor is now active."})
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception('Emergency request approval failed')
+        return jsonify({"status": "error", "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/emergency/review/<int:request_id>/reject', methods=['POST'])
+def emergency_review_reject(request_id):
+    required = _reviewer_required_response()
+    if required: return required
+    data = request.get_json(silent=True) or {}
+    note = str(data.get('note', 'Rejected by Traffic Control reviewer.'))[:500]
+    now = db_now()
+    conn = get_db_connection()
+    try:
+        ensure_emergency_table(conn)
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id,status FROM emergency_requests WHERE id=%s FOR UPDATE", (request_id,))
+            row = cursor.fetchone()
+            if not row: return jsonify({"status": "error", "message": "Emergency request was not found."}), 404
+            if row['status'] != 'PENDING_REVIEW':
+                return jsonify({"status": "error", "message": f"Request is not pending review (status: {row['status']})."}), 409
+            cursor.execute("""UPDATE emergency_requests SET status='REJECTED', updated_at=%s,
+                reviewed_by=%s, reviewed_at=%s, review_note=%s WHERE id=%s AND status='PENDING_REVIEW'""",
+                (now, session.get('reviewer_name','traffic-control-operator'), now, note, request_id))
+        conn.commit()
+        return jsonify({"status": "success", "message": "Emergency request rejected. Corridor remains inactive."})
+    except Exception as exc:
+        conn.rollback()
+        app.logger.exception('Emergency request rejection failed')
+        return jsonify({"status": "error", "message": str(exc)}), 500
+    finally:
+        conn.close()
 
 
 def _emergency_status_only():
@@ -995,6 +1157,8 @@ def emergency_advance():
 
 @app.route("/api/emergency/clear", methods=["POST"])
 def emergency_clear():
+    required = _reviewer_required_response()
+    if required: return required
     try:
         now = db_now()
         conn = get_db_connection()
