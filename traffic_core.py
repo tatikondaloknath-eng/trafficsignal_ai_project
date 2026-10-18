@@ -187,19 +187,50 @@ def emergency_payload(rows):
         return {"active":True,"request_id":int(row["id"]),"ambulance_id":row["ambulance_id"],"current_junction":int(row["current_junction"]),"destination":int(row["destination"]),"emergency_level":row["emergency_level"],"route":route,"route_index":idx,"next_junction":nextj,"status":row["status"],"segment_seconds":round(seg,1),"segment_progress":round(prog,3),"estimated_time_seconds":round(eta,1),"congestion":cong}
     finally: conn.close()
 
-def activate_emergency(ambulance_id,start,goal,level,frame=0):
+def activate_emergency(ambulance_id,start,goal,level,frame=0,verification=None):
+    if not verification or not verification.get("photo_blob") or not verification.get("challenge_id"):
+        raise RuntimeError("Fresh photo verification is required before activating an emergency corridor.")
     _,_,rows=fetch_network_frame(frame); cong={j:congestion(rows[j]) for j in range(1,5)}
     route,cost,segments=astar_route(start,goal,cong,rows); now=db_now(); first=segments[0]["seconds"] if segments else 0
     conn=get_db_connection()
     try:
         ensure_emergency_table(conn)
         with conn.cursor() as c:
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS emergency_verification_evidence (
+                    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    request_id BIGINT NOT NULL,
+                    ambulance_id VARCHAR(64) NOT NULL,
+                    challenge_id VARCHAR(64) NOT NULL,
+                    challenge_code VARCHAR(12) NOT NULL,
+                    captured_at DATETIME NOT NULL,
+                    received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    photo_sha256 CHAR(64) NOT NULL,
+                    photo_mime VARCHAR(40) NOT NULL,
+                    photo_blob MEDIUMBLOB NOT NULL,
+                    latitude DOUBLE NULL,
+                    longitude DOUBLE NULL,
+                    location_accuracy DOUBLE NULL,
+                    privacy_ack TINYINT NOT NULL DEFAULT 0,
+                    UNIQUE KEY uq_emergency_evidence_challenge (challenge_id),
+                    INDEX idx_emergency_evidence_request (request_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            # One active corridor at a time in this prototype.
             c.execute("UPDATE emergency_requests SET status='CLEARED',updated_at=%s WHERE status IN ('ACTIVE','AT DESTINATION')",(now,))
             c.execute("""INSERT INTO emergency_requests (ambulance_id,current_junction,destination,emergency_level,route_json,route_cost_seconds,route_index,segment_seconds,segment_started_at,status,started_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,0,%s,%s,'ACTIVE',%s,%s)""",(ambulance_id,start,goal,level,json.dumps(route),cost,first,now,now,now))
-            request_id=c.lastrowid
+            request_id=int(c.lastrowid)
+            # Insert photo evidence in the same transaction. Replayed challenge IDs fail via UNIQUE.
+            c.execute("""INSERT INTO emergency_verification_evidence
+                (request_id,ambulance_id,challenge_id,challenge_code,captured_at,photo_sha256,photo_mime,photo_blob,latitude,longitude,location_accuracy,privacy_ack)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (request_id,ambulance_id,verification["challenge_id"],verification["challenge_code"],verification["captured_at"],verification["photo_sha256"],verification["photo_mime"],verification["photo_blob"],verification.get("latitude"),verification.get("longitude"),verification.get("location_accuracy"),int(verification.get("privacy_ack",0))))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally: conn.close()
-    return {"request_id":int(request_id),"route":route,"estimated_time_seconds":cost,"segments":segments,"congestion":cong}
+    return {"request_id":request_id,"route":route,"estimated_time_seconds":cost,"segments":segments,"congestion":cong}
 
 def advance_emergency(frame=0):
     current=latest_emergency()
