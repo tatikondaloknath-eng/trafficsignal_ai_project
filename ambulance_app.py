@@ -8,8 +8,8 @@ from flask import Flask, jsonify, request, render_template
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from traffic_core import (
-    fetch_network_frame, congestion, astar_route, activate_emergency,
-    latest_emergency, emergency_payload, advance_emergency, clear_emergency,
+    fetch_network_frame, congestion, astar_route, submit_emergency_request,
+    latest_emergency, latest_request_for_ambulance, emergency_payload, advance_emergency, clear_emergency,
     get_db_connection,
 )
 
@@ -182,17 +182,17 @@ def activate():
             'location_accuracy': acc,
             'privacy_ack': 1,
         }
-        result = activate_emergency(ambulance_id, start, goal, level, frame, verification=verification)
-        _, _, rows = fetch_network_frame(frame)
-        result['emergency'] = emergency_payload(rows)
+        result = submit_emergency_request(ambulance_id, start, goal, level, frame, verification=verification)
+        request_status = result.pop('status', 'PENDING_REVIEW')
+        result['message'] = 'Evidence submitted for review in the main Traffic Control Center. The corridor is NOT active until a reviewer approves it.'
         result['photo_verification'] = {
-            'status': 'PHOTO_RECEIVED',
+            'status': 'PHOTO_RECEIVED_PENDING_REVIEW',
             'sha256': verification['photo_sha256'],
             'captured_at': verification['captured_at'],
             'location_provided': lat is not None and lon is not None,
-            'note': 'A fresh image was received and recorded. Photo submission alone does not medically verify emergency severity.'
+            'note': 'A fresh image was received and recorded. The main Traffic Control Center must review the evidence and approve the request before the corridor activates.'
         }
-        return jsonify({'status':'success', **result})
+        return jsonify({'status':'success', **result, 'request_status': request_status})
     except Exception as exc:
         app.logger.exception('Emergency activation failed')
         return error(str(exc), 400)
@@ -202,6 +202,16 @@ def activate():
 def status():
     try:
         frame = int(request.args.get('frame', 0))
+        ambulance_id = str(request.args.get('ambulance_id', '')).strip()[:64]
+        if ambulance_id:
+            latest = latest_request_for_ambulance(ambulance_id)
+            if latest and latest.get('request_status') not in ('ACTIVE', 'AT DESTINATION'):
+                return jsonify({'status':'success','emergency':latest})
+            if latest and latest.get('request_status') in ('ACTIVE', 'AT DESTINATION'):
+                _, _, rows = fetch_network_frame(frame)
+                active = emergency_payload(rows)
+                return jsonify({'status':'success','emergency':active})
+            return jsonify({'status':'success','emergency':{'active':False,'status':'NORMAL','route':[],'route_index':0}})
         _, _, rows = fetch_network_frame(frame)
         return jsonify({'status':'success','emergency':emergency_payload(rows)})
     except Exception as exc:
