@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Traffic Management System</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=10-main-review">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -314,10 +314,27 @@
                     <div>
                         <div class="eyebrow"><i class="fa-solid fa-tower-broadcast"></i> LIVE NETWORK DIGITAL TWIN</div>
                         <h2><i class="fa-solid fa-road emergency-icon"></i> Four-Junction Traffic Control Center</h2>
-                        <p class="hero-subtitle">The control center replays the traffic_data records as synchronized junction states. Vehicles are tied to the selected database frame, signals use the current demand record, and an active ambulance request is read from the separate Emergency Dispatch Web.</p>
+                        <p class="hero-subtitle">The control center replays the traffic_data records as synchronized junction states. Vehicles are tied to the selected database frame, signals use the current demand record, and ambulance photo submissions from the existing Emergency Dispatch Web appear in the review panel below; only requests approved by the Traffic Control reviewer activate the corridor.</p>
                     </div>
                     <div id="emergency-mode-badge" class="emergency-mode-badge"><span class="status-dot-mini"></span>NORMAL ADAPTIVE CONTROL</div>
                 </div>
+
+                <section class="card emergency-review-card mt-3" id="emergency-review-card">
+                    <div class="review-heading">
+                        <div><div class="eyebrow">CONTROL-CENTER AUTHORIZATION</div><h3><i class="fa-solid fa-shield-halved"></i> Emergency Evidence Review</h3><p>Ambulance submissions do not activate a corridor automatically. Review the captured photo here, then approve or reject the request.</p></div>
+                        <span class="review-state-pill" id="review-state-pill">LOCKED</span>
+                    </div>
+                    <div id="review-login-panel" class="review-login-panel">
+                        <label for="review-pin">Traffic Control reviewer PIN</label>
+                        <input id="review-pin" type="password" class="input-field" autocomplete="current-password" placeholder="Enter reviewer PIN" maxlength="128">
+                        <button class="btn btn-primary" id="review-login-btn" type="button"><i class="fa-solid fa-lock-open"></i> Unlock Review Panel</button>
+                        <small id="review-auth-message">Set EMERGENCY_REVIEW_PIN and SESSION_SECRET in the main Traffic Control Render service.</small>
+                    </div>
+                    <div id="review-workspace" class="hidden">
+                        <div class="review-toolbar"><span id="review-session-label"><i class="fa-solid fa-lock-open"></i> Reviewer session unlocked</span><div><button class="btn btn-secondary btn-small" id="review-refresh-btn" type="button"><i class="fa-solid fa-rotate"></i> Refresh Requests</button> <button class="btn btn-secondary btn-small" id="review-logout-btn" type="button"><i class="fa-solid fa-lock"></i> Lock Panel</button></div></div>
+                        <div id="review-queue" class="review-queue"><div class="empty-state">Loading pending emergency requests…</div></div>
+                    </div>
+                </section>
 
                 <div class="network-toolbar card">
                     <div class="network-title-group">
@@ -355,7 +372,7 @@
 
                 <div class="network-real-badge card mt-3">
                     <div><strong>CONTROL LOGIC</strong><span>Database frame → demand estimate → signal phase → vehicle state → emergency corridor priority</span></div>
-                    <div><strong>EMERGENCY SOURCE</strong><span>Separate Ambulance Dispatch Web writes the active request to MySQL.</span></div>
+                    <div><strong>EMERGENCY SOURCE</strong><span>Ambulance Dispatch submits evidence to MySQL; the main Traffic Control Center reviews and approves it.</span></div>
                     <div><strong>DATA NOTE</strong><span>Directional queues are estimated because the current traffic_data schema has no lane-direction field.</span></div>
                 </div>
 
@@ -540,6 +557,6 @@
             </section>
         </main>
     </div>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}?v=10-main-review"></script>
 </body>
 </html>
