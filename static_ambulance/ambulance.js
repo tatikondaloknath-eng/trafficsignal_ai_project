@@ -43,14 +43,35 @@ async function submitEvidenceAndActivate(){
     if(!capturedBlob||!challengeToken||!capturedAt)throw new Error('A fresh camera photo is required before activation.');
     if(!$('privacy-ack').checked)throw new Error('Please confirm you are authorized to submit this photo and will avoid unnecessary patient-identifying details.');
     const fd=new FormData();fd.append('ambulance_id',$('ambulance-id').value.trim());fd.append('current_junction',$('current-junction').value);fd.append('destination',$('destination').value);fd.append('emergency_level',$('level').value);fd.append('frame',String(currentFrame));fd.append('challenge_token',challengeToken);fd.append('challenge_code',challengeCode);fd.append('captured_at',capturedAt);fd.append('privacy_ack','yes');fd.append('photo',capturedBlob,'emergency-evidence.jpg');if(phoneLocation){fd.append('latitude',String(phoneLocation.latitude));fd.append('longitude',String(phoneLocation.longitude));fd.append('location_accuracy',String(phoneLocation.accuracy))}
-    const d=await api('/api/activate',{method:'POST',body:fd});routeData=d;closeVerificationModal();msg('Photo evidence was received and recorded. Corridor activated.',true);$('trip-badge').textContent='ACTIVE';$('trip-badge').style.borderColor='#ff3ea5';await refreshStatus();
+    const d=await api('/api/activate',{method:'POST',body:fd});routeData=d;closeVerificationModal();msg('Evidence submitted. Waiting for the main Traffic Control Center to review the photo and approve the corridor. No green corridor is active yet.',true);$('trip-badge').textContent='PENDING REVIEW';$('trip-badge').style.borderColor='#f0b429';await refreshStatus();
   }catch(e){setCameraNote(e.message,true);msg(`Activation blocked: ${e.message}`);submit.disabled=false}
-  finally{submit.innerHTML='<i class="fa-solid fa-shield-check"></i> Submit Evidence & Activate Corridor'}
+  finally{submit.innerHTML='<i class="fa-solid fa-shield-check"></i> Submit Evidence & Request Review'}
 }
 function closeVerificationModal(){stopCamera();const m=$('verification-modal');m.classList.add('hidden');m.setAttribute('aria-hidden','true')}
 
-async function refreshStatus(){try{const d=await api(`/api/status?frame=${currentFrame}`);renderTrip(d.emergency)}catch(e){console.error(e)}}
-function renderTrip(e){if(!e?.active){$('trip-empty').classList.remove('hidden');$('trip-active').classList.add('hidden');$('trip-badge').textContent='READY';return}$('trip-empty').classList.add('hidden');$('trip-active').classList.remove('hidden');$('trip-ambulance').textContent=e.ambulance_id;$('trip-current').textContent=`J${e.current_junction}`;$('trip-next').textContent=e.next_junction?`J${e.next_junction}`:'DEST';$('trip-destination').textContent=`J${e.destination}`;$('trip-eta').textContent=fmt(e.estimated_time_seconds);$('trip-status').textContent=e.status;$('trip-progress-text').textContent=Math.round(Number(e.segment_progress||0)*100)+'%';const pct=((Number(e.route_index||0)+Number(e.segment_progress||0))/Math.max(1,e.route.length-1))*100;$('trip-progress-fill').style.width=`${Math.min(100,pct)}%`;$('trip-timeline').innerHTML=e.route.map((j,i)=>`${i>0?'<div class="tl-line"></div>':''}<div class="tl-node ${i<e.route_index?'done':''} ${i===e.route_index?'active':''}"><div class="tl-circle">J${j}</div></div>`).join('')}
+async function refreshStatus(){try{const id=encodeURIComponent($('ambulance-id').value.trim());const d=await api(`/api/status?frame=${currentFrame}&ambulance_id=${id}`);renderTrip(d.emergency)}catch(e){console.error(e)}}
+function renderTrip(e){
+  if(!e){$('trip-empty').classList.remove('hidden');$('trip-active').classList.add('hidden');$('trip-badge').textContent='READY';return}
+  const status=String(e.request_status||e.status||'');
+  if(!e.active && !['PENDING_REVIEW','REJECTED','CLEARED'].includes(status)){$('trip-empty').classList.remove('hidden');$('trip-active').classList.add('hidden');$('trip-badge').textContent='READY';return}
+  $('trip-empty').classList.add('hidden');$('trip-active').classList.remove('hidden');
+  $('trip-ambulance').textContent=e.ambulance_id||$('ambulance-id').value.trim();
+  $('trip-current').textContent=e.current_junction?`J${e.current_junction}`:'—';
+  $('trip-next').textContent=e.next_junction?`J${e.next_junction}`:(status==='PENDING_REVIEW'?'Waiting for approval':'—');
+  $('trip-destination').textContent=e.destination?`J${e.destination}`:'—';
+  $('trip-eta').textContent=e.active?fmt(e.estimated_time_seconds):'Pending review';
+  const visibleStatus=status==='PENDING_REVIEW'?'PENDING REVIEW':status;
+  $('trip-status').textContent=visibleStatus;
+  $('trip-badge').textContent=visibleStatus;
+  $('trip-badge').style.borderColor=status==='PENDING_REVIEW'?'#f0b429':(e.active?'#ff3ea5':'#d9534f');
+  const idx=Number(e.route_index||0), route=Array.isArray(e.route)?e.route:[];
+  const pct=e.active?((idx+Number(e.segment_progress||0))/Math.max(1,route.length-1))*100:0;
+  $('trip-progress-text').textContent=Math.round(Math.min(100,pct))+'%';$('trip-progress-fill').style.width=`${Math.min(100,pct)}%`;
+  $('trip-timeline').innerHTML=route.map((j,i)=>`${i>0?'<div class="tl-line"></div>':''}<div class="tl-node ${i<idx?'done':''} ${i===idx?'active':''}"><div class="tl-circle">J${j}</div></div>`).join('');
+  $('advance-btn').disabled=!e.active;$('auto-btn').disabled=!e.active;
+  if(status==='PENDING_REVIEW') msg('Request is waiting for review in the main Traffic Control Center.');
+  if(status==='REJECTED') msg('The Traffic Control Center rejected this request. Normal traffic control remains active.');
+}
 async function advance(){try{const d=await api('/api/advance',{method:'POST',body:JSON.stringify({frame:currentFrame})});renderTrip(d.emergency);if(d.emergency.status==='AT DESTINATION')stopAuto()}catch(e){msg(e.message)}}
 function stopAuto(){if(autoTimer){clearInterval(autoTimer);autoTimer=null}$('auto-btn').innerHTML='<i class="fa-solid fa-play"></i> Auto Dispatch'}
 function startAuto(){stopAuto();$('auto-btn').innerHTML='<i class="fa-solid fa-pause"></i> Pause Auto';autoTimer=setInterval(async()=>{try{const d=await api(`/api/status?frame=${currentFrame}`);if(!d.emergency?.active){stopAuto();return}const p=Number(d.emergency.segment_progress||0);if(p>=.985)await advance();else refreshStatus()}catch(e){console.error(e)}},1000)}
